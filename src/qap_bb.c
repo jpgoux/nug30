@@ -133,6 +133,49 @@ static double lap(int n, const double c[NMAX][NMAX], int *rowsol, double *uo, do
  * On output u[i] = min_j (c[i][j] - v[j]), so (u, v) is always dual feasible
  * and sum u + sum v is a valid lower bound, equal to the optimum. */
 static int opt_lap = 2;   /* 0 = Hungarian, 1 = JV cold, 2 = JV warm start */
+
+/* h[j] = c[j] - v[j] for j < dim, h[j] = +inf for dim <= j < NMAX; returns
+ * min_j h[j].  Exact: same subtraction and comparisons as the scalar loop. */
+#ifdef __AVX512F__
+#include <immintrin.h>
+static inline double row_h_min(const double *c, const double *v, int dim, double *h) {
+    __m512d mn = _mm512_set1_pd(INFINITY), inf = mn;
+    for (int b = 0; b < dim; b += 8) {
+        int r = dim - b; __mmask8 k = r >= 8 ? 0xFF : (__mmask8)((1u << r) - 1);
+        __m512d x = _mm512_mask_sub_pd(inf, k, _mm512_loadu_pd(c + b), _mm512_loadu_pd(v + b));
+        _mm512_storeu_pd(h + b, x); mn = _mm512_min_pd(x, mn);
+    }
+    return _mm512_reduce_min_pd(mn);
+}
+/* first j with h[j] == x (x is known to be present) */
+static inline int first_eq(const double *h, double x) {
+    __m512d X = _mm512_set1_pd(x);
+    for (int b = 0; b < NMAX; b += 8) {
+        __mmask8 k = _mm512_cmp_pd_mask(_mm512_loadu_pd(h + b), X, _CMP_EQ_OQ);
+        if (k) return b + __builtin_ctz(k);
+    }
+    return 0;
+}
+static inline double min_except(const double *h, int jx, int dim) {
+    double save = ((double *)h)[jx]; ((double *)h)[jx] = INFINITY;
+    __m512d mn = _mm512_loadu_pd(h);
+    for (int b = 8; b < dim; b += 8) mn = _mm512_min_pd(_mm512_loadu_pd(h + b), mn);
+    ((double *)h)[jx] = save;
+    return _mm512_reduce_min_pd(mn);
+}
+#else
+static inline double row_h_min(const double *c, const double *v, int dim, double *h) {
+    double mn = INFINITY;
+    for (int j = 0; j < NMAX; j++) { h[j] = j < dim ? c[j] - v[j] : INFINITY; if (h[j] < mn) mn = h[j]; }
+    return mn;
+}
+static inline int first_eq(const double *h, double x) { int j = 0; while (h[j] != x) j++; return j; }
+static inline double min_except(const double *h, int jx, int dim) {
+    double mn = INFINITY; for (int j = 0; j < dim; j++) if (j != jx && h[j] < mn) mn = h[j]; return mn;
+}
+#endif
+
+static int opt_simdlap = 0;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
 static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v, int warm) {
     int colsol[NMAX], freer[NMAX], collist[NMAX], matches[NMAX], pred[NMAX];
     double d[NMAX];
@@ -162,7 +205,8 @@ static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
     } else {
         for (int i = 0; i < dim; i++) {
             double mn = INFINITY; int jm = 0;
-            for (int j = 0; j < dim; j++) { double h = c[i][j] - v[j]; if (h < mn) { mn = h; jm = j; } }
+            if (opt_simdlap) { double h[NMAX]; mn = row_h_min(c[i], v, dim, h); jm = first_eq(h, mn); }
+            else for (int j = 0; j < dim; j++) { double h = c[i][j] - v[j]; int lt = h < mn; mn = lt ? h : mn; jm = lt ? j : jm; }
             if (colsol[jm] < 0) { colsol[jm] = i; rowsol[i] = jm; } else freer[numfree++] = i;
         }
     }
@@ -172,10 +216,20 @@ static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
         int guard = 0;
         while (k < prv) {
             int i = freer[k++];
-            double umin = c[i][0] - v[0], usub = INFINITY; int j1 = 0, j2 = 0;
-            for (int j = 1; j < dim; j++) {
-                double h = c[i][j] - v[j];
-                if (h < usub) { if (h >= umin) { usub = h; j2 = j; } else { usub = umin; umin = h; j2 = j1; j1 = j; } }
+            double umin, usub; int j1 = 0, j2 = 0;
+            if (opt_simdlap) {   /* j1 = first argmin, j2 = first argmin over j != j1: same as the scalar scan */
+                double h[NMAX]; umin = row_h_min(c[i], v, dim, h); j1 = first_eq(h, umin);
+                usub = min_except(h, j1, dim); h[j1] = NAN; j2 = first_eq(h, usub);
+            } else {
+            umin = c[i][0] - v[0]; usub = INFINITY;
+            const double *ci = c[i];
+            for (int j = 1; j < dim; j++) {   /* branch-free form of the classic scan, same result */
+                double h = ci[j] - v[j];
+                int lt1 = h < umin, lt2 = h < usub;
+                double nsub = lt2 ? h : usub; int nj2 = lt2 ? j : j2;
+                usub = lt1 ? umin : nsub; j2 = lt1 ? j1 : nj2;
+                umin = lt1 ? h : umin; j1 = lt1 ? j : j1;
+            }
             }
             int i0 = colsol[j1];
             if (umin < usub - 1e-12) v[j1] -= (usub - umin);
@@ -224,7 +278,9 @@ static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
     }
     double tot = 0;
     for (int i = 0; i < dim; i++) {
-        double mn = INFINITY; for (int j = 0; j < dim; j++) { double h = c[i][j] - v[j]; if (h < mn) mn = h; }
+        double mn = INFINITY;
+        if (opt_simdlap) { double h[NMAX]; mn = row_h_min(c[i], v, dim, h); }
+        else for (int j = 0; j < dim; j++) { double h = c[i][j] - v[j]; if (h < mn) mn = h; }
         u[i] = mn; tot += mn;
     }
     for (int j = 0; j < dim; j++) tot += v[j];
@@ -366,21 +422,25 @@ static void applyMperm(work_t *w, int m, const int *p, double out[NMAX][NMAX]) {
      * usually differ in a few positions k; then APB changes by the rank-one
      * terms Ar[:,k] (Br[p[k]] - Br[pprev[k]]), O(m^2) each instead of O(m^3). */
     int D[NMAX], nd = 0;
+    const int mr = (m + 3) & ~3;   /* row width rounded for SIMD; Br is zero-padded up to mr */
     if (opt_incr && w->apb_ok && w->apb_age < 64) {
         for (int k = 0; k < m; k++) if (p[k] != w->pprev[k]) D[nd++] = k;
     } else nd = m + 1;
-    if (nd <= m / 2) {
+    if (nd < m) {   /* nd rank-one updates of m x mr cost less than one m x m x mr product */
         for (int t = 0; t < nd; t++) {
             int k = D[t]; const double *bn = w->Br[p[k]], *bo = w->Br[w->pprev[k]];
-            double db[NMAX]; for (int j = 0; j < NMAX; j++) db[j] = (j < m) ? bn[j] - bo[j] : 0;
-            for (int i = 0; i < m; i++) { double a = w->Ar[i][k];
-                for (int j = 0; j < NMAX; j++) w->APB[i][j] += a * db[j]; }
+            double db[NMAX]; for (int j = 0; j < mr; j++) db[j] = bn[j] - bo[j];
+            for (int i = 0; i < m; i++) { double a = w->Ar[i][k]; double *row = w->APB[i];
+                for (int j = 0; j < mr; j++) row[j] += a * db[j]; }
         }
         w->apb_age++;
     } else {
-        double PB[NMAX][NMAX];
-        for (int k = 0; k < m; k++) memcpy(PB[k], w->Br[p[k]], sizeof(double) * m);
-        matmul(m, w->Ar, PB, w->APB);
+        for (int i = 0; i < m; i++) {
+            double acc[NMAX]; for (int j = 0; j < mr; j++) acc[j] = 0;
+            for (int k = 0; k < m; k++) { double a = w->Ar[i][k]; const double *b = w->Br[p[k]];
+                for (int j = 0; j < mr; j++) acc[j] += a * b[j]; }
+            for (int j = 0; j < mr; j++) w->APB[i][j] = acc[j];
+        }
         w->apb_ok = 1; w->apb_age = 0;
     }
     memcpy(w->pprev, p, sizeof(int) * m);
@@ -463,7 +523,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         if (it + 1 >= nfw2 && f + K < target) { it++; break; }
     }
     (void)hist_best_at;
-    w->nfw += it; if (getenv("QPB_TRACE")) fprintf(stderr, "f(X)=%.3f z=%.3f\n", f + K, best);
+    static int trace = -1; if (trace < 0) trace = getenv("QPB_TRACE") != NULL;
+    w->nfw += it; if (trace) fprintf(stderr, "f(X)=%.3f z=%.3f\n", f + K, best);
     return best;
 }
 
@@ -514,6 +575,11 @@ static const char *g_prog = NULL;     /* progress file, rewritten every 10 s */
 static double g_prog_last = 0;
 static _Atomic long g_nodes_all = 0;
 static long g_depth_all[NMAX + 1];
+/* serial search position, for live monitoring: at depth d the search is in child
+ * g_pos[d] (1-based) of g_npos[d] kept children; g_nextlb[d] is the bound of the next
+ * unexplored sibling (children are sorted by bound, so the smallest one left) */
+static int g_pos[NMAX + 1], g_npos[NMAX + 1], g_curdepth = -1;
+static double g_nextlb[NMAX + 1];
 static void write_progress(int final) {
     if (!g_prog) return;
     double t = now();
@@ -524,7 +590,14 @@ static void write_progress(int final) {
     fprintf(f, "{\"elapsed_s\":%.1f,\"nodes\":%ld,\"ub\":%.0f,\"final\":%d,\"nodes_depth\":[", t - g_t0, (long)g_nodes_all, (double)g_ub, final);
     int last = 0; for (int d = 0; d <= NMAX; d++) if (g_depth_all[d]) last = d;
     for (int d = 0; d <= last; d++) fprintf(f, "%ld%s", g_depth_all[d], d < last ? "," : "");
-    fprintf(f, "]}\n"); fclose(f); rename(tmp, g_prog);
+    fprintf(f, "]");
+    if (g_curdepth >= 0) {
+        double lb = INFINITY;
+        fprintf(f, ",\"path\":[");
+        for (int d = 0; d < g_curdepth; d++) { fprintf(f, "%s[%d,%d]", d ? "," : "", g_pos[d], g_npos[d]); if (g_nextlb[d] < lb) lb = g_nextlb[d]; }
+        fprintf(f, "],\"lb_open\":%.2f", isinf(lb) ? -1.0 : lb);
+    }
+    fprintf(f, "}\n"); fclose(f); rename(tmp, g_prog);
 }
 
 static void report_solution(const int *p, double c, int who) {
@@ -556,6 +629,7 @@ static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2
         int i = ev->F[a];
         for (int b = 0; b < m; b++) { w->Ar[a][b] = A[i][ev->F[b]]; w->Br[a][b] = B[ev->L[a]][ev->L[b]]; }
     }
+    for (int a = 0; a < m; a++) for (int b = m; b < ((m + 3) & ~3); b++) w->Br[a][b] = 0;
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
         int i = ev->F[a], j = ev->L[b]; double s = 0;
         for (int k = 0; k < N; k++) if (nd->rc[k] >= 0) s += A[i][k] * B[j][nd->rc[k]];
@@ -715,12 +789,15 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
     child_t ch[NMAX];
     int nch = branch(nd, w, &ev, ch, who);
+    int d0 = nd->depth;
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
+        g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
         dfs(nd, w, st, who);
         nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
     }
+    g_curdepth = d0;
 }
 
 /* ---------- Knuth estimator ---------- */
@@ -905,6 +982,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-noecache")) opt_ecache = 0;
         else if (!strcmp(argv[a], "-nomemo")) opt_memo = 0;
         else if (!strcmp(argv[a], "-nofastmm")) opt_fastmm = 0;
+        else if (!strcmp(argv[a], "-nosimdlap")) opt_simdlap = 0;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
         else if (!strcmp(argv[a], "-sb")) opt_sb = atoi(argv[++a]);

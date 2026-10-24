@@ -163,6 +163,19 @@ tr:last-child td{border-bottom:0}
 .grid30 span{aspect-ratio:1;border-radius:4px;background:var(--sun-soft);border:1px solid var(--line);display:grid;place-items:center;font-family:var(--mono);font-size:.72rem;color:var(--muted)}
 .grid30 span.j{background:var(--terra);color:#fff;border-color:var(--terra)}
 @media (max-width:760px){.cover .wrap{grid-template-columns:1fr}.journal{max-width:190px}.rightcol{align-items:flex-start;order:-1}.rightcol .journal{display:none}.two{grid-template-columns:1fr}}
+
+.treebox{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:.8rem 1rem;overflow-x:auto}
+.treebox table{width:100%;border-collapse:collapse;font-size:.85rem}
+.treebox th{font-family:var(--display);font-weight:600;text-align:left;color:var(--muted);padding:.25rem .4rem;border-bottom:1px solid var(--line);white-space:nowrap}
+.treebox td{padding:.18rem .4rem;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+.treebox .num{text-align:right;font-family:var(--mono);font-size:.8rem}
+.tb-bar{height:10px;border-radius:0 4px 4px 0;background:var(--run);min-width:2px}
+.tb-pr{position:relative;height:10px;width:110px;background:var(--line);border-radius:4px;overflow:hidden}
+.tb-pr>div{position:absolute;left:0;top:0;bottom:0;background:var(--ok)}
+.tb-heat{display:flex;gap:2px}
+.tb-heat span{display:block;width:14px;height:12px;border-radius:2px;background:var(--navy)}
+.tb-pos{font-family:var(--display);margin:.2rem 0 .7rem;font-size:1rem}
+.tb-pos b{font-family:var(--mono);font-size:.95rem}
 </style>
 
 <style>
@@ -298,6 +311,10 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
 
   <h3><span data-l="fr">Calculs en cours</span><span data-l="en">Running jobs</span></h3>
   <div class="cards" id="running"></div>
+
+  <h3><span data-l="fr">L'arbre en direct</span><span data-l="en">The tree, live</span></h3>
+  <p class="small"><span data-l="fr">Compteurs réécrits toutes les 10 s par le calcul en cours, niveau par niveau. La borne haute est fixée à l'optimum plus un ; un nœud est élagué quand sa borne basse QPB la dépasse. L'écart mesure, pour chaque nœud évalué, la distance entre la borne haute et sa borne basse (en unités de coût).</span><span data-l="en">Counters rewritten every 10 s by the running job, level by level. The upper bound is fixed at the optimum plus one; a node is pruned when its QPB lower bound exceeds it. The gap measures, for each evaluated node, the distance between the upper bound and its lower bound (in cost units).</span></p>
+  <div id="tree" class="treebox"></div>
 
   <h3>Agents</h3>
   <div class="cards" id="agents"></div>
@@ -818,7 +835,7 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
     LANG=l; document.documentElement.setAttribute('data-lang',l); document.documentElement.lang=l;
     document.getElementById('lang-fr').setAttribute('aria-pressed',l==='fr'); document.getElementById('lang-en').setAttribute('aria-pressed',l==='en');
     try{localStorage.setItem('nug30lang',l)}catch(e){}
-    buildNug(); if(state) render(); else { renderEmpty(); drawChart(staticOurs()); }
+    buildNug(); renderTree(); if(state) render(); else { renderEmpty(); drawChart(staticOurs()); }
   }
   document.getElementById('lang-fr').addEventListener('click',()=>setLang('fr'));
   document.getElementById('lang-en').addEventListener('click',()=>setLang('en'));
@@ -902,12 +919,54 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
   async function poll(){
     try{
       const r = await files.read('nug30/etat/etat.json');
-      state = JSON.parse(new TextDecoder().decode(r.bytes)); lastOk=Date.now(); render();
+      state = JSON.parse(new TextDecoder().decode(r.bytes)); lastOk=Date.now(); render(); pollTree();
     }catch(e){
       const code=e&&e.code;
       if(code==='not_granted'){liveMsg=()=>T("Accès aux fichiers du projet refusé : le suivi en direct est masqué.","Access to project files declined: live tracking is hidden."); renderEmpty(); return;}
       if(!lastOk){liveMsg=()=>T("État de la campagne introuvable pour l'instant, nouvel essai dans 10 s.","Campaign state not found yet, retrying in 10 s.")+' ('+(code||'error')+')'; renderEmpty();}
     }
+  }
+
+  // ---------- live tree (per-depth counters of the running job) ----------
+  let treeData=null, treeJob=null, treeProg=null;
+  async function pollTree(){
+    if(!files||!state) return;
+    const run=(state.jobs||[]).filter(j=>j.status==='running'&&/-stats /.test(j.args||''));
+    if(!run.length){ treeData=null; renderTree(); return; }
+    const j=run[0];
+    try{ const r=await files.read('nug30/runs/'+j.id+'/stats.json'); treeData=JSON.parse(new TextDecoder().decode(r.bytes)); treeJob=j; }catch(e){ treeData=null; }
+    try{ const r=await files.read('nug30/runs/'+j.id+'/progress.json'); treeProg=JSON.parse(new TextDecoder().decode(r.bytes)); }catch(e){ treeProg=null; }
+    renderTree();
+  }
+  function renderTree(){
+    const el=document.getElementById('tree'); if(!el) return;
+    if(!treeData||!treeJob){ el.innerHTML='<p class="small">'+T("Aucun calcul en cours n'écrit de compteurs par niveau.","No running job writes per-level counters.")+'</p>'; return; }
+    const D=treeData.depth.filter(r=>r.nodes>0), edges=treeData.gap_edges||[];
+    const maxN=Math.max(...D.map(r=>r.nodes)), lmax=Math.log10(maxN+1);
+    const tot=D.reduce((a,r)=>a+r.nodes,0);
+    // DFS position, readable while the path above is a single node
+    const pos=[]; for(let d=1; d<D.length; d++){ if(D[d-1].nodes!==1) break; pos.push([D[d].nodes, D[d-1].kids_kept]); }
+    const ord=n=>LANG==='en'?(n+(n%10===1&&n%100!==11?'st':n%10===2&&n%100!==12?'nd':n%10===3&&n%100!==13?'rd':'th')):(n===1?'1er':n+'e');
+    const posTxt=pos.length?pos.map((p,i)=>i===0?T(`fils de la racine : <b>${ord(p[0])}</b> sur ${p[1]}`,`root child: <b>${ord(p[0])}</b> of ${p[1]}`):T(`au niveau ${i+1} : <b>${ord(p[0])}</b> sur ${p[1]}`,`at level ${i+1}: <b>${ord(p[0])}</b> of ${p[1]}`)).join(' · '):'';
+    let extra='';
+    if(treeProg&&treeProg.path&&treeProg.path.length){
+      const P=treeProg.path; let frac=0, w=1; P.forEach(([c,n])=>{ frac+=w*(c-1)/n; w/=n; });
+      extra=`<div class="small" style="margin:-.4rem 0 .7rem">${T('Chemin courant','Current path')} : <span class="mono">${P.map(([c,n])=>c+'/'+n).join(' → ')}</span> · ${T('borne basse des nœuds ouverts','lower bound of open nodes')} <b>${treeProg.lb_open>=0?fmtNum(treeProg.lb_open,1):'?'}</b> · ${T('borne haute','upper bound')} <b>${fmtNum(treeProg.ub,0)}</b> · ${T('part de l’arbre parcourue si les sous-arbres étaient égaux','share of the tree done if subtrees were equal')} <b>${(100*frac).toFixed(1)} %</b> ${T('(sous-estime : les premiers sous-arbres sont les plus gros)','(an underestimate: the first subtrees are the largest)')}</div>`;
+    }
+    const bins=edges.length+1, binLbl=i=>i===0?'< '+edges[0]:(i===bins-1?'≥ '+edges[bins-2]:edges[i-1]+'–'+edges[i]);
+    let h=`<div class="tb-pos">${treeJob.instance||treeJob.id} · ${fmtNum(tot,0)} ${T('nœuds','nodes')}${posTxt?' · '+posTxt:''}</div>`;
+    h+=extra;
+    h+=`<table><thead><tr><th>${T('Niveau','Level')}</th><th class="num">${T('Évalués','Evaluated')}</th><th style="width:34%"></th><th>${T('Élagués','Pruned')}</th><th class="num">${T('Enfants retenus','Children kept')}</th><th>${T('Écart à la borne haute','Gap to upper bound')} <span class="small">(${binLbl(0)} … ${binLbl(bins-1)})</span></th></tr></thead><tbody>`;
+    D.forEach(r=>{
+      const w=Math.max(0.5,100*Math.log10(r.nodes+1)/lmax), pr=r.nodes?r.fathomed/r.nodes:0;
+      const gh=r.gap_hist||[], gm=Math.max(1,...gh);
+      const heat=gh.map((c,i)=>`<span data-tip="${binLbl(i)} : ${fmtNum(c,0)}" style="opacity:${c?0.15+0.85*c/gm:0.06}"></span>`).join('');
+      h+=`<tr><td class="num">${r.d}</td><td class="num">${fmtNum(r.nodes,0)}</td><td><div class="tb-bar" style="width:${w}%" data-tip="${fmtNum(r.nodes,0)} ${T('nœuds','nodes')}"></div></td>`+
+         `<td><div style="display:flex;align-items:center;gap:.4rem"><div class="tb-pr"><div style="width:${(100*pr).toFixed(1)}%"></div></div><span class="num">${(100*pr).toFixed(0)} %</span></div></td>`+
+         `<td class="num">${fmtNum(r.kids_kept,0)} / ${fmtNum(r.kids_cand,0)}</td><td><div class="tb-heat">${heat}</div></td></tr>`;
+    });
+    h+=`</tbody></table><p class="small">${T("Barres des nœuds en échelle logarithmique. Les enfants sont explorés de la borne la plus faible à la plus forte : les premiers sous-arbres sont les plus gros.","Node bars on a log scale. Children are explored from the weakest bound to the strongest: the first subtrees are the largest.")}</p>`;
+    el.innerHTML=h;
   }
   function render(){
     const now=Date.now()/1000, age=now-state.updated;
@@ -1118,7 +1177,11 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
     {fr:"Un seul calcul par enfant dans l'anticipation (mémo)", en:"One evaluation per child in the look-ahead (memo)",
      note:"Avec les règles 3 et 4, l'enfant (i→j) figure dans la liste de la ligne i et dans celle de la colonne j : le code d'époque l'évaluait deux fois. Même arbre, au nœud près (justification ci-dessous). Itérations de Frank-Wolfe : −30 %. Gains : 1,82 / 1,58 / 1,45 / 1,50 / 1,46 ; moyenne × 1,56.",
      note_en:"With rules 3 and 4, child (i→j) is in the list of row i and in that of column j: the original code evaluated it twice. Same tree, node for node (justification below). Frank-Wolfe iterations: −30%. Gains: 1.82 / 1.58 / 1.45 / 1.50 / 1.46; mean × 1.56.",
-     route:"1", track:"impl", inst:"nug14-17", before:71.32, after:47.89, date:"24/10/2026"}
+     route:"1", track:"impl", inst:"nug14-17", before:71.32, after:47.89, date:"24/10/2026"},
+    {fr:"LAP sans branchement, produit A·P·B incrémental plus souvent", en:"Branch-free LAP, incremental A·P·B used more often",
+     note:"Mesuré en temps réel, le LAP de Jonker-Volgenant prend 63 % du temps, surtout dans sa réduction de lignes (recherche du plus petit et du deuxième plus petit coût réduit d'une ligne). Réécrite sans branchement conditionnel, elle donne le même résultat au bit près, donc le même arbre. Essayés et rejetés car plus lents : la même boucle en AVX-512, la compilation guidée par profil, le compilateur clang. Gains : 1,11 / 1,23 / 1,27 / 1,17 / 1,19 ; moyenne × 1,19.",
+     note_en:"Measured in real time, the Jonker-Volgenant LAP takes 63% of the time, mostly in its row reduction (finding the smallest and second smallest reduced cost of a row). Rewritten without conditional branches, it gives the same result bit for bit, hence the same tree. Tried and rejected because slower: the same loop in AVX-512, profile-guided compilation, the clang compiler. Gains: 1.11 / 1.23 / 1.27 / 1.17 / 1.19; mean × 1.19.",
+     route:"1, 3", track:"impl", inst:"nug14-17", before:46.05, after:38.45, date:"24/10/2026"}
   ];
   function renderMeasured(){
     let cum=1; const ct={impl:1,algo:1}; const rows=MEASURED.map((r,i)=>{const g=r.before/r.after; cum*=g; ct[r.track||'impl']*=g; return {...r,i:i+1,g,cum};});
