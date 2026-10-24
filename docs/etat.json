@@ -1,12 +1,12 @@
 {
- "updated": 1792857627.0147624,
+ "updated": 1792858230.8815272,
  "machine": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
   "cores": 4,
   "load": [
-   1.462890625,
-   1.6328125,
-   1.93701171875
+   0.9697265625,
+   1.0,
+   1.4375
   ],
   "maxj": 2
  },
@@ -813,17 +813,31 @@
    "args": "-strat D -dives 400 -q 1.5 -seed 7 -ub 3745 -nointprune",
    "mode": "estimate",
    "group": "Calibration Knuth",
-   "status": "running",
+   "status": "done",
    "start": 1792856933.653864,
-   "end": null,
+   "end": 1792857695.7243743,
    "progress": {
-    "elapsed_s": 681.9,
-    "dives_done": 354,
+    "elapsed_s": 761.7,
+    "dives_done": 400,
     "dives_total": 400,
-    "nodes": 2548,
-    "est_nodes": 26459000.0,
-    "est_time_s": 15129.0,
-    "final": 0
+    "nodes": 2888,
+    "est_nodes": 30497000.0,
+    "est_time_s": 16368.0,
+    "final": 1
+   },
+   "result": {
+    "mode": "estimate",
+    "n": 25,
+    "dives": 400,
+    "q": 1.5,
+    "nfw": 150,
+    "ub": 3744,
+    "est_nodes": 30497000.0,
+    "est_nodes_stderr": 6332000.0,
+    "est_time_s": 16368.0,
+    "sec_per_node": 0.0005367,
+    "nodes_evaluated": 2888,
+    "wall_s": 761.7
    }
   },
   {

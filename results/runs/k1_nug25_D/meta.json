@@ -8,8 +8,9 @@
  "label_en": "nug25, Knuth estimate (400 dives)",
  "desc": "Calibration : comparer l'estimation à la vraie taille d'arbre avant de croire l'estimation de NUG30.",
  "desc_en": "Calibration: compare the estimate with the true tree size before trusting the NUG30 estimate.",
- "status": "running",
+ "status": "done",
  "start": 1792856933.653864,
  "host": "vm",
- "pid": 5240
+ "pid": 5240,
+ "end": 1792857695.7243743
 }
