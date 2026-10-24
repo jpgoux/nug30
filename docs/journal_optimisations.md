@@ -121,6 +121,8 @@ gprof, LAP et A·P·B non incorporés : LAP par plus courts chemins 56 %, A·P·
 | Itérations de FW × 0,5 et × 0,4 au lieu de × 0,7, avec le départ au point du père | | nug20 62,1 s → 56,9 s → 53,5 s, mais nug22 120,6 s → 123,8 s (+18 % de nœuds à × 0,5) ; × 0,7 gardé |
 | A·P·B par symétrie | les matrices de nug sont symétriques | sans objet : Ar P Br n'est pas symétrique (P ne l'est pas) |
 | Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
+| Profondeur de l'anticipation, estimée sur nug30 (24 oct., 22 h UTC) | règle 4 jusqu'au niveau a, règle 3 jusqu'au niveau b ; (a, b) = (1, 4), (2, 3), (2, 4) = D, (2, 5), (3, 4), (3, 5) = E ; Knuth 300 plongées, graines 7 et 11 | moyenne géométrique des nœuds : 1,9 × 10¹⁰, 2,0 × 10¹⁰, 5,8 × 10⁹, 5,4 × 10⁹, 1,0 × 10¹⁰, 4,8 × 10⁹. Deux graines diffèrent parfois d'un facteur 10 : l'estimateur ne tranche pas à ×1,5 près ; moins d'anticipation est nettement pire |
+| Profondeur de l'anticipation, mesurée sur nug24 entier (24 oct., 23 h UTC) | mêmes réglages, 1 cœur chacun, 4 calculs en même temps, code actuel | D (2, 4) : 22 784 046 nœuds, 2 025 s ; (3, 4) : 21 909 011, 2 603 s ; (2, 5) : 16 381 520, 2 942 s ; E : 15 977 220, 3 070 s. Un niveau de plus retire jusqu'à 30 % des nœuds mais chaque nœud coûte 1,5 fois plus : D gardé. Face au code de 2000 en D (3 h 05), × 5,5 sur nug24 |
 
 ## Vitesse d'un cœur de 2026 face à la HP C3000
 

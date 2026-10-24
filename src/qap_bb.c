@@ -53,14 +53,17 @@ static void scale_strategy(void) {
         strat[k].nfw3 = (int)(strat[k].nfw3 * opt_nfwx + 0.5);
     }
 }
+static int opt_c4 = -1, opt_c3 = -1, opt_nb4 = -1, opt_nb3 = -1;   /* overrides of the strategy table */
 static void set_strategy(char s) {
     nstrat = 0;
     int c4 = -1, c3 = -1;
     if (s == 'B') { c4 = 1; c3 = 2; } else if (s == 'C') { c4 = 1; c3 = 3; } else if (s == 'D') { c4 = 2; c3 = 4; }
     else if (s == 'E') { c4 = 3; c3 = 5; }
     if (s == 'A') { strat[nstrat++] = (rule_t){NMAX, 2, 150, 100, 0, 0}; scale_strategy(); return; }
-    strat[nstrat++] = (rule_t){c4, 4, 150, 100, 50, 20};
-    strat[nstrat++] = (rule_t){c3, 3, 100, 100, 25, 10};
+    if (opt_c4 >= 0) c4 = opt_c4;
+    if (opt_c3 >= 0) c3 = opt_c3;
+    strat[nstrat++] = (rule_t){c4, 4, 150, 100, 50, opt_nb4 > 0 ? opt_nb4 : 20};
+    strat[nstrat++] = (rule_t){c3, 3, 100, 100, 25, opt_nb3 > 0 ? opt_nb3 : 10};
     strat[nstrat++] = (rule_t){NMAX, 2, 75, 50, 0, 0};
     scale_strategy();
 }
@@ -1309,6 +1312,80 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
 }
 
 /* ---------- Knuth estimator ---------- */
+/* -top L: the levels above L are enumerated exactly (every node evaluated, as in the
+ * search), and the dives start from each surviving node at depth L. The estimate is
+ * exact count above L plus, for each frontier node, the mean of its own dives: the
+ * randomness is confined below L, where single subtrees are smaller. */
+static int opt_top = 0;
+typedef struct { node_t *v; int n, cap; double cnt, t; } frontier_t;
+static void top_enum(node_t *nd, work_t *w, frontier_t *F) {
+    eval_t ev; double t = now();
+    { const rule_t *R = rule_at(nd->depth); eval_node(nd, w, &ev, R->nfw1, R->nfw2, 0); }
+    if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { F->cnt++; F->t += now() - t; return; }
+    child_t ch[NMAX]; int nch = branch(nd, w, &ev, ch, 0);
+    F->cnt++; F->t += now() - t;
+    for (int c = 0; c < nch; c++) {
+        if (ch[c].lb > prune_thr(g_ub)) continue;
+        nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
+        if (nd->depth >= opt_top) {
+            if (F->n == F->cap) { F->cap = F->cap ? 2 * F->cap : 256; F->v = realloc(F->v, sizeof(node_t) * F->cap); }
+            F->v[F->n++] = *nd;
+        } else top_enum(nd, w, F);
+        nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
+    }
+}
+/* one dive from node start; returns the weighted node count and time of the dive */
+static void dive_from(const node_t *start, work_t *w, rng_t *r, double *estN, double *estT, long *totnodes) {
+    node_t nd = *start; double weight = 1, zroot = NAN; *estN = 0; *estT = 0;
+    for (;;) {
+        eval_t ev; double t = now();
+        { const rule_t *R = rule_at(nd.depth); eval_node(&nd, w, &ev, R->nfw1, R->nfw2, 0); }
+        child_t ch[NMAX]; int nch = 0;
+        int leaf = (ev.m <= 1 || ev.z > prune_thr(g_ub));
+        if (!leaf) nch = branch(&nd, w, &ev, ch, 0);
+        double dt = now() - t; (*totnodes)++;
+        if (isnan(zroot)) zroot = ev.z;
+        *estN += weight; *estT += weight * dt;
+        if (leaf || nch == 0) break;
+        double pr[NMAX], tot = 0;
+        for (int c = 0; c < nch; c++) {
+            double gap = (g_ub - ch[c].lb) / (g_ub - zroot + 1e-9); if (gap < 1e-6) gap = 1e-6;
+            pr[c] = opt_q > 0 ? pow(gap, opt_q) : 1.0; tot += pr[c];
+        }
+        double x = rng_unif(r) * tot; int c = 0;
+        while (c < nch - 1 && x > pr[c]) { x -= pr[c]; c++; }
+        weight *= tot / pr[c];
+        nd.rc[ch[c].i] = ch[c].j; nd.cr[ch[c].j] = ch[c].i; nd.depth++;
+    }
+}
+static void estimate_top(int dives, unsigned long long seed) {
+    work_t *w = calloc(1, sizeof(work_t));
+    rng_t r = {seed * 2654435761ULL + 1};
+    double t0 = now(); long totnodes = 0;
+    node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1; root.depth = 0;
+    frontier_t F = {0};
+    top_enum(&root, w, &F);
+    double t1 = now() - t0;
+    int k = F.n ? (dives + F.n - 1) / F.n : 0;        /* dives per frontier node */
+    double sumN = F.cnt, sumT = F.t, var = 0;
+    for (int f = 0; f < F.n; f++) {
+        double s = 0, s2 = 0, st = 0;
+        for (int d = 0; d < k; d++) { double eN, eT; dive_from(&F.v[f], w, &r, &eN, &eT, &totnodes); s += eN; s2 += eN * eN; st += eT; }
+        double m = s / k; sumN += m; sumT += st / k;
+        if (k > 1) var += fmax(0, s2 / k - m * m) / (k - 1);
+        if (g_prog && (now() - g_prog_last >= 10 || f + 1 == F.n)) {
+            g_prog_last = now();
+            char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", g_prog);
+            FILE *pf = fopen(tmp, "w");
+            if (pf) { fprintf(pf, "{\"elapsed_s\":%.1f,\"top\":%d,\"frontier\":%d,\"frontier_done\":%d,\"top_nodes\":%.0f,\"nodes\":%ld,\"final\":%d}\n",
+                              now() - t0, opt_top, F.n, f + 1, F.cnt, totnodes, f + 1 == F.n); fclose(pf); rename(tmp, g_prog); }
+        }
+    }
+    printf("{\"mode\":\"estimate_top\",\"n\":%d,\"top\":%d,\"top_nodes\":%.0f,\"top_s\":%.1f,\"frontier\":%d,\"dives_per_node\":%d,\"q\":%.2f,\"ub\":%.0f,"
+           "\"est_nodes\":%.4e,\"est_nodes_stderr\":%.3e,\"est_time_s\":%.4e,\"nodes_evaluated\":%ld,\"wall_s\":%.1f}\n",
+           N, opt_top, F.cnt, t1, F.n, k, opt_q, (double)g_ub, sumN, sqrt(var), sumT, totnodes + (long)F.cnt, now() - t0);
+    free(F.v); free(w);
+}
 static void estimate(int dives, unsigned long long seed) {
     work_t *w = calloc(1, sizeof(work_t));
     rng_t r = {seed * 2654435761ULL + 1};
@@ -1539,6 +1616,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-monge")) opt_monge = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-spfuse")) opt_spfuse = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lacap")) opt_lacap = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-c4")) opt_c4 = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-top")) opt_top = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-c3")) opt_c3 = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-nb4")) opt_nb4 = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-nb3")) opt_nb3 = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lasize")) opt_lasize = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lanb")) opt_lanb = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lanfw")) opt_lanfw = atoi(argv[++a]);
@@ -1592,7 +1674,7 @@ int main(int argc, char **argv) {
         printf("{\"root_qpb\":%.2f,\"pb\":%.2f,\"fw_iters\":%ld,\"t\":%.4f,\"ub\":%.0f}\n", ev.z, w->trST, w->nfw, now() - t, (double)g_ub);
         return 0;
     }
-    if (!strcmp(mode, "estimate")) { estimate(dives, seed); return 0; }
+    if (!strcmp(mode, "estimate")) { if (opt_top > 0) estimate_top(dives, seed); else estimate(dives, seed); return 0; }
     double t0 = now();
     stats_t tot = {0}; long lap_tot = 0, fw_tot = 0;
     if (!strcmp(mode, "solve")) {
