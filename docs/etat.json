@@ -1,12 +1,12 @@
 {
- "updated": 1792858230.8815272,
+ "updated": 1792858835.149931,
  "machine": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
   "cores": 4,
   "load": [
-   0.9697265625,
-   1.0,
-   1.4375
+   1.95556640625,
+   1.71875,
+   1.54638671875
   ],
   "maxj": 2
  },
@@ -967,11 +967,39 @@
    "id": "r1_nug24_D",
    "instance": "nug24",
    "label": "nug24, stratégie D, conditions du papier",
-   "desc": "Papier : 31 865 440 nœuds, 5 829,9 min.",
-   "args": "-strat D -ub 3489 -nointprune",
+   "desc": "Papier : 31 865 440 nœuds, 5 829,9 min. Compteurs par profondeur (temps, écart borne, itérations) enregistrés pour la suite.",
+   "args": "-strat D -ub 3489 -nointprune -stats /mnt/project-files/nug30/runs/r1_nug24_D/stats.json",
    "mode": "solve",
    "group": "Reproduction 2001-2002",
-   "status": "pending"
+   "status": "running",
+   "start": 1792858509.0529976,
+   "end": null,
+   "progress": {
+    "elapsed_s": 324.1,
+    "nodes": 1312256,
+    "ub": 3488,
+    "final": 0,
+    "nodes_depth": [
+     1,
+     1,
+     1,
+     3,
+     57,
+     1076,
+     17383,
+     112000,
+     325214,
+     435235,
+     286276,
+     105343,
+     24345,
+     4348,
+     816,
+     135,
+     20,
+     2
+    ]
+   }
   },
   {
    "id": "r1_nug25_D",

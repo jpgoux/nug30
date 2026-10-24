@@ -1,0 +1,16 @@
+{
+ "id": "r1_nug24_D",
+ "group": "Reproduction 2001-2002",
+ "instance": "nug24",
+ "mode": "solve",
+ "args": "-strat D -ub 3489 -nointprune -stats /mnt/project-files/nug30/runs/r1_nug24_D/stats.json",
+ "label": "nug24, stratégie D, conditions du papier",
+ "desc": "Papier : 31 865 440 nœuds, 5 829,9 min. Compteurs par profondeur (temps, écart borne, itérations) enregistrés pour la suite.",
+ "label_en": "nug24, strategy D, paper conditions",
+ "desc_en": "Paper: 31,865,440 nodes, 5,829.9 min. Per-depth counters (time, bound gap, iterations) recorded for the next steps.",
+ "hold": false,
+ "status": "running",
+ "start": 1792858509.0529976,
+ "host": "vm",
+ "pid": 6772
+}
