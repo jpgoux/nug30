@@ -132,7 +132,7 @@ static double lap(int n, const double c[NMAX][NMAX], int *rowsol, double *uo, do
  * reduction phase is replaced by a greedy assignment to row minima.
  * On output u[i] = min_j (c[i][j] - v[j]), so (u, v) is always dual feasible
  * and sum u + sum v is a valid lower bound, equal to the optimum. */
-static int opt_lap = 2;   /* 0 = Hungarian, 1 = JV cold, 2 = JV warm start */
+static int opt_lap = 4;   /* 0 Hungarian, 1 JV cold, 2 JV warm, 3 JV warm with JV start, 4 shortest paths (default), 5 = 4 with Hungarian start */
 
 /* h[j] = c[j] - v[j] for j < dim, h[j] = +inf for dim <= j < NMAX; returns
  * min_j h[j].  Exact: same subtraction and comparisons as the scalar loop. */
@@ -175,7 +175,7 @@ static inline double min_except(const double *h, int jx, int dim) {
 }
 #endif
 
-static int opt_simdlap = 0;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
+static int opt_simdlap = 0, opt_spkeep = 0;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
 static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v, int warm) {
     int colsol[NMAX], freer[NMAX], collist[NMAX], matches[NMAX], pred[NMAX];
     double d[NMAX];
@@ -281,6 +281,62 @@ static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
         double mn = INFINITY;
         if (opt_simdlap) { double h[NMAX]; mn = row_h_min(c[i], v, dim, h); }
         else for (int j = 0; j < dim; j++) { double h = c[i][j] - v[j]; if (h < mn) mn = h; }
+        u[i] = mn; tot += mn;
+    }
+    for (int j = 0; j < dim; j++) tot += v[j];
+    return tot;
+}
+
+
+/* ---------- LAP: shortest augmenting paths only, written for SIMD ----------
+ * Warm start from column prices v: each row takes its cheapest column if free.
+ * Every remaining free row is then assigned by one Dijkstra search on reduced
+ * costs (Jonker-Volgenant augmentation step); the inner loops run over all
+ * columns with masks instead of branches, so the compiler vectorizes them.
+ * Same optimum as lap_jv; ties may be broken differently. */
+static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v, int keep) {
+    int colsol[NMAX], freer[NMAX], pred[NMAX], scan[NMAX], nfree = 0;
+    double d[NMAX] __attribute__((aligned(64)));
+    double done[NMAX] __attribute__((aligned(64)));   /* 0 = open, +inf = closed */
+    for (int j = 0; j < dim; j++) colsol[j] = -1;
+    if (keep) {   /* rowsol holds the previous assignment: keep each row whose column is still its cheapest */
+        for (int i = 0; i < dim; i++) {
+            double mn = INFINITY; const double *ci = c[i];
+            for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; mn = h < mn ? h : mn; }
+            int j0 = rowsol[i];
+            if (ci[j0] - v[j0] <= mn) colsol[j0] = i; else freer[nfree++] = i;
+        }
+    } else for (int i = 0; i < dim; i++) {
+        double mn = INFINITY; int jm = 0; const double *ci = c[i];
+        for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; int lt = h < mn; mn = lt ? h : mn; jm = lt ? j : jm; }
+        if (colsol[jm] < 0) { colsol[jm] = i; rowsol[i] = jm; } else freer[nfree++] = i;
+    }
+    for (int f = 0; f < nfree; f++) {
+        int fr = freer[f], ns = 0, jend = -1;
+        const double *cf = c[fr];
+        for (int j = 0; j < dim; j++) { d[j] = cf[j] - v[j]; pred[j] = fr; done[j] = 0; }
+        double mn;
+        for (;;) {
+            mn = INFINITY; int js = 0;   /* closest open column */
+            for (int j = 0; j < dim; j++) { double x = d[j] + done[j]; int lt = x < mn; mn = lt ? x : mn; js = lt ? j : js; }
+            done[js] = INFINITY; scan[ns++] = js;
+            if (colsol[js] < 0) { jend = js; break; }
+            int i = colsol[js]; const double *ci = c[i];
+            double h = ci[js] - v[js] - mn;
+            for (int j = 0; j < dim; j++) {   /* relax the edges of row i */
+                double v2 = ci[j] - v[j] - h;
+                int up = (v2 < d[j]) & (done[j] == 0);
+                d[j] = up ? v2 : d[j]; pred[j] = up ? i : pred[j];
+            }
+        }
+        for (int t = 0; t < ns; t++) { int j = scan[t]; v[j] += d[j] - mn; }
+        int i, j = jend;
+        do { i = pred[j]; colsol[j] = i; int k = rowsol[i]; rowsol[i] = j; j = k; } while (i != fr);
+    }
+    double tot = 0;
+    for (int i = 0; i < dim; i++) {
+        double mn = INFINITY; const double *ci = c[i];
+        for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; mn = h < mn ? h : mn; }
         u[i] = mn; tot += mn;
     }
     for (int j = 0; j < dim; j++) tot += v[j];
@@ -479,6 +535,12 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
         double lapv;
         if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
+        else if (opt_lap == 3 && it == 0) lapv = lap_jv(m, w->G, p, u, v, 0);   /* JV with its own column reduction */
+        else if (opt_lap == 5 && it == 0) lapv = lap(m, w->G, p, u, v);
+        else if (opt_lap == 4 || opt_lap == 5) {
+            if (it == 0) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) mn = w->G[i][j] < mn ? w->G[i][j] : mn; v[j] = mn; }
+            lapv = lap_sp(m, w->G, p, u, v, it > 0 && opt_spkeep);
+        }
         else {
             if (opt_lap == 1) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) if (w->G[i][j] < mn) mn = w->G[i][j]; v[j] = mn; }
             lapv = lap_jv(m, w->G, p, u, v, 1);
@@ -729,7 +791,11 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         for (int x = 0; x < ncl; x++) for (int y = x + 1; y < ncl; y++) if (cols[y].s > cols[x].s) { cand_t t = cols[x]; cols[x] = cols[y]; cols[y] = t; }
         for (int x = 0; x < nr && x < R->nbest; x++) cands[nc++] = rows[x];
         for (int x = 0; x < ncl && x < R->nbest; x++) cands[nc++] = cols[x];
-        work_t *w2 = malloc(sizeof(work_t)); w2->nlap = w2->nfw = 0;
+        /* look-ahead workspace, kept per thread: its eigen-decomposition cache (keyed by
+         * the free sets) stays valid for the whole run, and it is allocated once */
+        static __thread work_t *w2keep = NULL;
+        if (!w2keep) w2keep = calloc(1, sizeof(work_t));
+        work_t *w2 = w2keep; w2->nlap = w2->nfw = 0;
         double bestscore = -INFINITY; int bk = best_kind, bl = best_line;
         double zline[NMAX];
         /* child (a,b) appears in the candidate list of row a and of column b:
@@ -762,7 +828,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
             }
             if (score > bestscore) { bestscore = score; bk = cands[c].kind; bl = cands[c].line; memcpy(zpro, zline, sizeof(double) * m); have_pro = 1; }
         }
-        w->nlap += w2->nlap; w->nfw += w2->nfw; free(w2);
+        w->nlap += w2->nlap; w->nfw += w2->nfw;
         best_kind = bk; best_line = bl;
     }
     int nch = 0;
@@ -1058,6 +1124,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nomemo")) opt_memo = 0;
         else if (!strcmp(argv[a], "-nofastmm")) opt_fastmm = 0;
         else if (!strcmp(argv[a], "-nosimdlap")) opt_simdlap = 0;
+        else if (!strcmp(argv[a], "-nospkeep")) opt_spkeep = 0;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
         else if (!strcmp(argv[a], "-sb")) opt_sb = atoi(argv[++a]);

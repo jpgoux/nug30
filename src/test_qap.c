@@ -39,12 +39,22 @@ static void test_lap(void) {
         int p[NMAX]; for (int i = 0; i < n; i++) p[i] = i;
         double best = INFINITY;
         do { double s = 0; for (int i = 0; i < n; i++) s += c[i][p[i]]; if (s < best) best = s; } while (next_perm(p, n));
-        for (int alg = 0; alg < 3; alg++) {
+        for (int alg = 0; alg < 5; alg++) {
             int rs[NMAX]; double u[NMAX] = {0}, v[NMAX] = {0}, val;
             if (alg == 0) val = lap(n, c, rs, u, v);
             else if (alg == 1) {   /* JV cold: v initialised by column minima, as in qpb_fw */
                 for (int j = 0; j < n; j++) { double mn = INFINITY; for (int i = 0; i < n; i++) if (c[i][j] < mn) mn = c[i][j]; v[j] = mn; }
                 val = lap_jv(n, c, rs, u, v, 0);
+            } else if (alg == 3) { /* shortest paths, cold: column minima */
+                for (int j = 0; j < n; j++) { double mn = INFINITY; for (int i = 0; i < n; i++) if (c[i][j] < mn) mn = c[i][j]; v[j] = mn; }
+                val = lap_sp(n, c, rs, u, v, 0);
+            } else if (alg == 4) { /* shortest paths, warm */
+                static double c2[NMAX][NMAX]; int rs2[NMAX]; double u2[NMAX], v2[NMAX];
+                for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) c2[i][j] = c[i][j] + rnd(range / 4 + 1);
+                lap(n, c2, rs2, u2, v2);
+                for (int j = 0; j < n; j++) { v[j] = v2[j]; }
+                for (int i = 0; i < n; i++) rs[i] = rs2[i];   /* previous assignment kept where still cheapest */
+                val = lap_sp(n, c, rs, u, v, 1);
             } else {               /* JV warm: duals of a perturbed matrix */
                 static double c2[NMAX][NMAX]; int rs2[NMAX]; double u2[NMAX], v2[NMAX];
                 for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) c2[i][j] = c[i][j] + rnd(range / 4 + 1);
@@ -102,7 +112,7 @@ static double brute_completion(const node_t *nd) {
 
 static void set_opts(int combo) {
     opt_incr = combo & 1; opt_ecache = (combo >> 1) & 1; opt_memo = (combo >> 2) & 1;
-    opt_fastmm = (combo >> 3) & 1; opt_lap = (combo >> 4) & 1 ? 0 : 2;
+    opt_fastmm = (combo >> 3) & 1; opt_lap = (combo >> 4) & 1 ? 0 : (combo & 2 ? 4 : 2);
 }
 
 /* ---------- 2. QPB bound validity ---------- */

@@ -7,4 +7,5 @@ timeout 10 $BIN $O -ckpt $T/a -ckpt_s 3 > /dev/null
 timeout 8 $BIN $O -resume $T/a -ckpt $T/b -ckpt_s 3 > /dev/null 2>&1
 $BIN $O -resume $T/b -ckpt $T/c > /dev/null 2>&1
 L=$(head -1 $T/c); rm -rf $T
-echo "$L" | grep -q ' ub 1732 nodes 58818 ' && echo "checkpoint: OK ($L)" || { echo "checkpoint: FAILED ($L)"; exit 1; }
+E=$(grep '^nug17 ' $(dirname $0)/expected.txt | cut -d' ' -f4)
+echo "$L" | grep -q " ub 1732 nodes $E " && echo "checkpoint: OK ($L)" || { echo "checkpoint: FAILED ($L)"; exit 1; }
