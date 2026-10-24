@@ -187,7 +187,7 @@ static inline double min_except(const double *h, int jx, int dim) {
 }
 #endif
 
-static int opt_simdlap = 0, opt_spkeep = 0, opt_spu = 1;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
+static int opt_simdlap = 0, opt_spkeep = 0, opt_spu = 1, opt_spfuse = 0;   /* spfuse: argmin inside the relaxation pass, measured slower (nug17 6.3 s -> 9.2 s) */   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
 static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v, int warm) {
     int colsol[NMAX], freer[NMAX], collist[NMAX], matches[NMAX], pred[NMAX];
     double d[NMAX];
@@ -326,8 +326,27 @@ static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
     for (int f = 0; f < nfree; f++) {
         int fr = freer[f], ns = 0, jend = -1;
         const double *cf = c[fr];
-        for (int j = 0; j < dim; j++) { d[j] = cf[j] - v[j]; pred[j] = fr; done[j] = 0; }
         double mn;
+        if (opt_spfuse) {   /* the search for the closest open column is done in the relaxation pass */
+            double nmn = INFINITY; int njs = 0;
+            for (int j = 0; j < dim; j++) { double x = cf[j] - v[j]; d[j] = x; pred[j] = fr; done[j] = 0;
+                int lt = x < nmn; nmn = lt ? x : nmn; njs = lt ? j : njs; }
+            for (;;) {
+                mn = nmn; int js = njs;
+                done[js] = INFINITY; scan[ns++] = js;
+                if (colsol[js] < 0) { jend = js; break; }
+                int i = colsol[js]; const double *ci = c[i];
+                double h = ci[js] - v[js] - mn;
+                nmn = INFINITY; njs = 0;
+                for (int j = 0; j < dim; j++) {   /* relax the edges of row i, then keep the closest open column */
+                    double v2 = ci[j] - v[j] - h, dj = d[j], dn = done[j];
+                    int up = (v2 < dj) & (dn == 0);
+                    dj = up ? v2 : dj; d[j] = dj; pred[j] = up ? i : pred[j];
+                    double x = dj + dn; int lt = x < nmn; nmn = lt ? x : nmn; njs = lt ? j : njs;
+                }
+            }
+        } else {
+        for (int j = 0; j < dim; j++) { d[j] = cf[j] - v[j]; pred[j] = fr; done[j] = 0; }
         for (;;) {
             mn = INFINITY; int js = 0;   /* closest open column */
             for (int j = 0; j < dim; j++) { double x = d[j] + done[j]; int lt = x < mn; mn = lt ? x : mn; js = lt ? j : js; }
@@ -341,6 +360,7 @@ static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
                 d[j] = up ? v2 : d[j]; pred[j] = up ? i : pred[j];
             }
         }
+        }
         for (int t = 0; t < ns; t++) { int j = scan[t]; v[j] += d[j] - mn; }
         int i, j = jend;
         do { i = pred[j]; colsol[j] = i; int k = rowsol[i]; rowsol[i] = j; j = k; } while (i != fr);
@@ -353,6 +373,51 @@ static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
         for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; mn = h < mn ? h : mn; }
         u[i] = mn; tot += mn;
     }
+    for (int j = 0; j < dim; j++) tot += v[j];
+    return tot;
+}
+
+/* lap_sp with the column loops padded to a multiple of 4: columns dim..dim4-1 get
+ * cost +inf and dual 0, so they are never chosen, and every loop has a trip count
+ * the compiler can split into whole vectors with no scalar remainder. */
+static double lap_spw(int dim, double c[NMAX][NMAX], int *rowsol, double *u, double *v) {
+    int colsol[NMAX], freer[NMAX], pred[NMAX] __attribute__((aligned(64))), scan[NMAX], nfree = 0;
+    double d[NMAX] __attribute__((aligned(64)));
+    double done[NMAX] __attribute__((aligned(64)));
+    int dim4 = (dim + 3) & ~3;
+    if (dim4 & 3) __builtin_unreachable();
+    for (int i = 0; i < dim; i++) for (int j = dim; j < dim4; j++) c[i][j] = INFINITY;
+    for (int j = dim; j < dim4; j++) v[j] = 0;
+    for (int j = 0; j < dim; j++) colsol[j] = -1;
+    for (int i = 0; i < dim; i++) {
+        double mn = INFINITY; int jm = 0; const double *ci = c[i];
+        for (int j = 0; j < dim4; j++) { double h = ci[j] - v[j]; int lt = h < mn; mn = lt ? h : mn; jm = lt ? j : jm; }
+        if (colsol[jm] < 0) { colsol[jm] = i; rowsol[i] = jm; } else freer[nfree++] = i;
+    }
+    for (int f = 0; f < nfree; f++) {
+        int fr = freer[f], ns = 0, jend = -1;
+        const double *cf = c[fr];
+        for (int j = 0; j < dim4; j++) { d[j] = cf[j] - v[j]; pred[j] = fr; done[j] = 0; }
+        double mn;
+        for (;;) {
+            mn = INFINITY; int js = 0;
+            for (int j = 0; j < dim4; j++) { double x = d[j] + done[j]; int lt = x < mn; mn = lt ? x : mn; js = lt ? j : js; }
+            done[js] = INFINITY; scan[ns++] = js;
+            if (colsol[js] < 0) { jend = js; break; }
+            int i = colsol[js]; const double *ci = c[i];
+            double h = ci[js] - v[js] - mn;
+            for (int j = 0; j < dim4; j++) {
+                double v2 = ci[j] - v[j] - h;
+                int up = (v2 < d[j]) & (done[j] == 0);
+                d[j] = up ? v2 : d[j]; pred[j] = up ? i : pred[j];
+            }
+        }
+        for (int t = 0; t < ns; t++) { int j = scan[t]; v[j] += d[j] - mn; }
+        int i, j = jend;
+        do { i = pred[j]; colsol[j] = i; int k = rowsol[i]; rowsol[i] = j; j = k; } while (i != fr);
+    }
+    double tot = 0;
+    for (int i = 0; i < dim; i++) { int j = rowsol[i]; u[i] = c[i][j] - v[j]; tot += u[i]; }
     for (int j = 0; j < dim; j++) tot += v[j];
     return tot;
 }
@@ -540,6 +605,28 @@ static void build_from_vw(int m, const double VW[NMAX][NMAX], const double *s, d
         for (int j = 0; j <= i; j++) { double t = 0; for (int l = 0; l < k; l++) t += r[l] * VW[j][l]; out[i][j] = out[j][i] = t; }
     }
 }
+/* LAP on the costs lambda_i mu_j with lambda ascending and mu ascending: these costs
+ * are Monge once the columns are reversed, so the assignment i -> k-1-i is optimal
+ * (rearrangement inequality) and the north-west staircase gives dual s, t with
+ * s_i + t_j <= lambda_i mu_j, tight on the assignment. Returns NAN if the duals fail
+ * the feasibility check (rounding), the caller then solves the LAP. */
+static int opt_monge = 0;   /* closed form, measured worse: other optimal duals, nug17 57 085 -> 64 095 nodes */
+static double monge_lap(int k, const double *la, const double *mu, double *s, double *t) {
+    int i = 0, j = 0; double ra = 1, rb = 1;
+    s[0] = 0; t[k - 1] = la[0] * mu[k - 1];
+    while (i < k - 1 || j < k - 1) {
+        int down = (j == k - 1) || (i < k - 1 && ra < rb);
+        if (down) { rb -= ra; i++; ra = 1; s[i] = la[i] * mu[k - 1 - j] - t[k - 1 - j]; }
+        else      { ra -= rb; j++; rb = 1; t[k - 1 - j] = la[i] * mu[k - 1 - j] - s[i]; }
+    }
+    double scale = 1, viol = 0, tot = 0;
+    for (int a = 0; a < k; a++) for (int b = 0; b < k; b++) {
+        double c = la[a] * mu[b]; if (fabs(c) > scale) scale = fabs(c);
+        double x = s[a] + t[b] - c; if (x > viol) viol = x; }
+    if (viol > 1e-9 * scale) return NAN;
+    for (int l = 0; l < k; l++) tot += s[l] + t[l];
+    return tot;
+}
 /* setup of the QPB quadratic: computes Sp, Tp, trST for current Ar, Br */
 static double setup_qpb(work_t *w, int m) {
     int k = m - 1;
@@ -548,7 +635,8 @@ static double setup_qpb(work_t *w, int m) {
     const eig_t *ea = get_eig(w, w->ea, w->maskF, m, w->Ar);
     const eig_t *eb = get_eig(w, w->eb, w->maskL, m, w->Br);
     for (int i = 0; i < k; i++) for (int j = 0; j < k; j++) L[i][j] = ea->lam[i] * eb->lam[j];
-    double pb = lap(k, L, sol, s, t);   /* <lambda, mu>_-  and its dual s, t */
+    double pb = opt_monge ? monge_lap(k, ea->lam, eb->lam, s, t) : NAN;
+    if (isnan(pb)) pb = lap(k, L, sol, s, t);   /* <lambda, mu>_-  and its dual s, t */
     build_from_vw(m, ea->VW, s, w->Sp);
     build_from_vw(m, eb->VW, t, w->Tp);
     w->trST = pb;
@@ -703,9 +791,9 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
         else if (opt_lap == 3 && it == 0) lapv = lap_jv(m, w->G, p, u, v, 0);   /* JV with its own column reduction */
         else if (opt_lap == 5 && it == 0) lapv = lap(m, w->G, p, u, v);
-        else if (opt_lap == 4 || opt_lap == 5 || opt_lap == 6) {
+        else if (opt_lap == 4 || opt_lap == 5 || opt_lap == 6 || opt_lap == 7) {
             if (it == 0) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) mn = w->G[i][j] < mn ? w->G[i][j] : mn; v[j] = mn; }
-            lapv = opt_lap == 6 ? lap_spf(m, w->G, p, u, v) : lap_sp(m, w->G, p, u, v, it > 0 && opt_spkeep);
+            lapv = opt_lap == 6 ? lap_spf(m, w->G, p, u, v) : opt_lap == 7 ? lap_spw(m, w->G, p, u, v) : lap_sp(m, w->G, p, u, v, it > 0 && opt_spkeep);
         }
         else {
             if (opt_lap == 1) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) if (w->G[i][j] < mn) mn = w->G[i][j]; v[j] = mn; }
@@ -1255,7 +1343,12 @@ static void pool_push(const node_t *nd, double lb) {
     pool[pool_n].nd = *nd; pool[pool_n].lb = lb; pool_n++;
 }
 
-typedef struct { node_t nd; double lb; } sitem_t;
+/* parent's final Frank-Wolfe point, shared by the children of one branching on a
+ * worker's stack (children start from it, see inherit_x); freed by the last child.
+ * Nodes handed back to the pool drop it and start from the centre. */
+typedef struct { int ref, m, posF[NMAX], posL[NMAX]; double X[NMAX][NMAX]; } xpar_t;
+typedef struct { node_t nd; double lb; xpar_t *xp; int ci, cj; } sitem_t;
+static inline void xpar_drop(xpar_t **xp) { if (*xp && --(*xp)->ref == 0) free(*xp); *xp = NULL; }
 typedef struct { int id; stats_t st; work_t *w; sitem_t *stack; int sp; pthread_mutex_t mtx; } wk_t;
 static wk_t *g_wk = NULL;
 
@@ -1290,7 +1383,7 @@ static void *worker(void *arg) {
         int bi = 0;
         for (int k = 1; k < pool_n; k++)
             if (pool[k].nd.depth > pool[bi].nd.depth || (pool[k].nd.depth == pool[bi].nd.depth && pool[k].lb < pool[bi].lb)) bi = k;
-        sitem_t it = {pool[bi].nd, pool[bi].lb}; pool[bi] = pool[--pool_n];
+        sitem_t it = {pool[bi].nd, pool[bi].lb, NULL, 0, 0}; pool[bi] = pool[--pool_n];
         pool_busy++;
         int sp = 0; stack[sp++] = it; me->sp = sp;   /* under pool_lock: never lost from a snapshot */
         pthread_mutex_unlock(&pool_lock);
@@ -1306,7 +1399,7 @@ static void *worker(void *arg) {
                 if (need) {
                     /* give back the shallowest half of the stack (bottom entries) */
                     int give = sp > 1 ? sp / 2 : 0;
-                    for (int k = 0; k < give; k++) { pool_push(&stack[k].nd, stack[k].lb); nodes_returned++; }
+                    for (int k = 0; k < give; k++) { xpar_drop(&stack[k].xp); pool_push(&stack[k].nd, stack[k].lb); nodes_returned++; }
                     memmove(stack, stack + give, sizeof(sitem_t) * (sp - give)); sp -= give;
                     pthread_cond_broadcast(&pool_cond);
                 }
@@ -1314,7 +1407,8 @@ static void *worker(void *arg) {
                 tstart = now();
             }
             sitem_t cur = stack[--sp];
-            if (cur.lb > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
+            if (cur.lb > prune_thr(g_ub)) { xpar_drop(&cur.xp); me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
+            if (cur.xp) { inherit_x(me->w, (const double (*)[NMAX])cur.xp->X, cur.xp->m, cur.xp->posF[cur.ci], cur.xp->posL[cur.cj]); xpar_drop(&cur.xp); }
             eval_t ev; double t = now();
             { const rule_t *R = rule_at(cur.nd.depth); eval_node(&cur.nd, me->w, &ev, R->nfw1, R->nfw2, me->id); }
             me->st.t_bound += now() - t;
@@ -1323,8 +1417,15 @@ static void *worker(void *arg) {
             if (me->id == 0 && (me->st.nodes & 255) == 0) write_progress(0);
             if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             child_t ch[NMAX]; int nch = branch(&cur.nd, me->w, &ev, ch, me->id);
+            xpar_t *xp = NULL;
+            if ((opt_warm & 2) && nch > 0) {
+                xp = malloc(sizeof(xpar_t)); xp->ref = nch; xp->m = ev.m;
+                memcpy(xp->X, me->w->X, sizeof(xp->X));
+                for (int a = 0; a < ev.m; a++) { xp->posF[ev.F[a]] = a; xp->posL[ev.L[a]] = a; }
+            }
             for (int c = nch - 1; c >= 0; c--) { /* push worst first so best is explored first */
                 sitem_t s; s.nd = cur.nd; s.nd.rc[ch[c].i] = ch[c].j; s.nd.cr[ch[c].j] = ch[c].i; s.nd.depth++; s.lb = ch[c].lb;
+                s.xp = xp; s.ci = ch[c].i; s.cj = ch[c].j;
                 stack[sp++] = s;
             }
             me->sp = sp; pthread_mutex_unlock(&me->mtx);
@@ -1398,6 +1499,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-updstop")) opt_updstop = 1;
         else if (!strcmp(argv[a], "-nfwx")) opt_nfwx = atof(argv[++a]);
         else if (!strcmp(argv[a], "-warm")) opt_warm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-monge")) opt_monge = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-spfuse")) opt_spfuse = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lacap")) opt_lacap = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lasize")) opt_lasize = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lanb")) opt_lanb = atoi(argv[++a]);

@@ -65,7 +65,7 @@ Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nom
 - Différence avec l'essai sans gain du même nom (tableau ci-dessous) : celui-là ne portait que sur les enfants évalués par l'anticipation, avec 18 à 35 itérations seulement.
 - Variante : réajuster S et T au point de départ (`-warm 6`) : nug20 × 1,23, nug22 × 1,22 ; non retenue.
 - Reprise après checkpoint : les nœuds relus dans le fichier partent du centre (le point du père n'est pas sauvé), donc l'arbre repris diffère un peu (nug17 : 57 108 nœuds contre 57 085). Le test vérifie la reprise exacte avec `-warm 0` et l'écart de moins de 1 % avec le défaut.
-- À faire : la recherche parallèle n'utilise pas encore ce départ.
+- Recherche parallèle (4 fils) : chaque branchement range le point du père dans un bloc partagé par ses enfants sur la pile du fil, libéré par le dernier enfant ; un nœud rendu au réservoir commun repart du centre. nug22 sur 4 cœurs : 42,2 s → 34,8 s (× 1,21), 1,91 M nœuds. Efficacité face au série : 94 % sans ce départ, 88 % avec (mesures série faites à 4 calculs simultanés, donc un peu pessimistes).
 
 ### Mesure directe face au code de 2000 (24 octobre, 19 h 30 UTC)
 Même machine, même charge, stratégie C, borne supérieure optimum + 1 : nug20 285,8 s → 75,3 s (× 3,80) ; nug22 691,5 s → 155,0 s (× 4,46).
@@ -95,6 +95,10 @@ Lecture (tendance : croît pour A5 et B3, stable pour A1, A4, A6, B1, décroît 
 - Stratégie D sur nug20 : code de 2000 717,7 s, code actuel 89,5 s (× 8,0), dont B2 × 1,98 ; la stratégie C reste plus rapide en temps absolu (76,9 s).
 - Nombre de nœuds, code actuel / code de 2000 : nug14 0,75 ; nug15 0,92 ; nug16a 0,96 ; nug16b 0,99 ; nug17 1,02 ; nug20 1,08 ; nug22 0,94.
 
+## Profil du code actuel (nug20, 24 octobre 20 h 30 UTC)
+
+gprof, LAP et A·P·B non incorporés : LAP par plus courts chemins 56 %, A·P·B incrémental 16 %, évaluation du nœud 7 %, corps de Frank-Wolfe 6 %, produits de matrices (point de départ hérité) 5 %, LAP de mise en place 4 %, valeurs propres 4 %. Par appel du LAP : m = 14,0 en moyenne, 5,4 lignes libres après l'affectation gloutonne, 5,4 colonnes balayées par ligne libre.
+
 ## Essais sans gain
 
 | Essai | Idée | Résultat |
@@ -107,6 +111,9 @@ Lecture (tendance : croît pour A5 et B3, stable pour A1, A4, A6, B1, décroît 
 | Frank-Wolfe par paires (Lacoste-Julien et Jaggi) | X tenu comme combinaison convexe d'atomes ; on déplace du poids de l'atome de plus grand ⟨G, A⟩ vers la permutation du LAP | racine de nug30 après 50 itérations : 5 318 au lieu de 5 295 ; sur l'arbre, nug22 −10 % de nœuds mais temps × 1,03 seulement, et moins bon que FW classique quand on réduit les itérations |
 | Anticipation décidée par la taille du sous-problème | règle 3 sous le niveau 3 tant que m ≥ k (k = 10 à 14, 1 à 5 candidates, 5 à 18 itérations) | nœuds divisés par 2 à 4 (nug17 60 174 → 14 755), mais temps plus long : nug17 6,8 s → 7,8 s au mieux, nug20 75 s → 100 s |
 | LAP groupés dans un cœur | 4 LAP de même taille en parallèle, un par case d'un registre AVX2 (4 doubles) ; recherche du minimum sans réduction horizontale, mais la relaxation lit une ligne différente par case (lecture dispersée, gather) | micro-banc sur coûts aléatoires, temps par LAP : m = 10 × 1,25 ; m = 14 × 1,09 ; m = 18 × 0,94 ; m = 24 × 0,63 ; m = 29 × 0,74. Perdant aux tailles des nœuds de nug30 (m ≥ 18), non intégré |
+| Recherche du minimum dans la passe de relaxation du LAP | une seule passe sur les colonnes au lieu de deux par étape de Dijkstra, même résultat au bit près | nug17 6,3 s → 9,2 s : la boucle fusionnée n'est plus vectorisée |
+| LAP de mise en place de S, T en forme close | les coûts λ_i μ_j sont de Monge : affectation i → k − 1 − i et duales en escalier | autres duales optimales, donc autres S, T : nug17 57 085 → 64 095 nœuds, plus lent |
+| Boucles du LAP alignées sur 4 colonnes | colonnes de remplissage à coût infini, sans reste scalaire | nug20 61,8 s → 61,2 s, dans le bruit |
 | Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
 
 ## Vitesse d'un cœur de 2026 face à la HP C3000
