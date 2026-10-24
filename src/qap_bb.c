@@ -422,6 +422,31 @@ static double lap_spw(int dim, double c[NMAX][NMAX], int *rowsol, double *u, dou
     return tot;
 }
 
+/* Approximate LAP for the Frank-Wolfe direction: each row takes its cheapest
+ * reduced column if still free, the remaining rows take the cheapest free column.
+ * u_i = min_j (c_ij - v_j) keeps (u, v) dual feasible, so sum u + sum v is a valid
+ * lower bound on the LAP value; *pc returns the cost of the permutation found. */
+static int opt_alap = 0;   /* 0 exact LAP at every iteration; k: exact one iteration in k */
+static double lap_greedy(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, const double *v, double *pc) {
+    int colsol[NMAX], freer[NMAX], nfree = 0; double tot = 0, cost = 0;
+    for (int j = 0; j < dim; j++) colsol[j] = -1;
+    for (int i = 0; i < dim; i++) {
+        double mn = INFINITY; int jm = 0; const double *ci = c[i];
+        for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; int lt = h < mn; mn = lt ? h : mn; jm = lt ? j : jm; }
+        u[i] = mn; tot += mn;
+        if (colsol[jm] < 0) { colsol[jm] = i; rowsol[i] = jm; } else freer[nfree++] = i;
+    }
+    for (int f = 0; f < nfree; f++) {
+        int i = freer[f], jb = -1; double mn = INFINITY; const double *ci = c[i];
+        for (int j = 0; j < dim; j++) if (colsol[j] < 0) { double h = ci[j] - v[j]; if (h < mn) { mn = h; jb = j; } }
+        colsol[jb] = i; rowsol[i] = jb;
+    }
+    for (int j = 0; j < dim; j++) tot += v[j];
+    for (int i = 0; i < dim; i++) cost += c[i][rowsol[i]];
+    *pc = cost;
+    return tot;
+}
+
 /* lap_sp in single precision: twice as many values per vector instruction.
  * Only the assignment and the column duals v come from the float search; the
  * row duals are then recomputed in double as u_i = min_j (c_ij - v_j), so
@@ -787,8 +812,13 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     double hist_best_at[8]; int it;
     for (it = 0; it < nfw; it++) {
         if (!opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
-        double lapv;
-        if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
+        double lapv, gp = NAN;   /* gp: <G, P> when the LAP is approximate */
+        if (opt_alap > 1 && it > 0 && it % opt_alap != 0 && opt_fuse) {
+            double v0[NMAX]; memcpy(v0, v, sizeof(double) * m);
+            lapv = lap_greedy(m, w->G, p, u, v, &gp);
+            if (gp - (2 * (f - w->trST - s2) + s2) > -1e-9 * (1 + fabs(gp))) { gp = NAN; memcpy(v, v0, sizeof(double) * m); lapv = lap_sp(m, w->G, p, u, v, 0); }   /* not a descent direction: exact LAP */
+        }
+        else if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
         else if (opt_lap == 3 && it == 0) lapv = lap_jv(m, w->G, p, u, v, 0);   /* JV with its own column reduction */
         else if (opt_lap == 5 && it == 0) lapv = lap(m, w->G, p, u, v);
         else if (opt_lap == 4 || opt_lap == 5 || opt_lap == 6 || opt_lap == 7) {
@@ -803,7 +833,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         /* <G, X> = 2 <MX, X> + <Cr, X>, and f = <MX, X> + <Cr, X> + trST */
         double gx = opt_fuse ? 2 * (f - w->trST - s2) + s2 : dotm(m, w->G, w->X);
         double z = f - gx + lapv + K;
-        if (z > best) {
+        if (z > best && isnan(gp)) {   /* U from exact LAP duals only */
             best = z;
             for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->U[i][j] = w->G[i][j] - u[i] - v[j];
             /* shift: we store z without K? no: z includes K */
@@ -861,7 +891,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             if (it + 1 >= nfw2 && f + K < target) { it++; break; }
             continue;
         }
-        double gd = lapv - gx;            /* <G, P - X> = <G,P> - <G,X>, <G,P> = lap value */
+        double gd = (isnan(gp) ? lapv : gp) - gx;   /* <G, P - X> = <G,P> - <G,X>, <G,P> = lap value when exact */
         double q = 0;
         if (opt_fuse) {   /* q = <P - X, MP - MX> = sum_i (MP - MX)[i][p_i] - <X, MP> + <X, MX> */
             for (int i = 0; i < m; i++) q += w->MP[i][p[i]] - w->MX[i][p[i]];
@@ -1015,10 +1045,16 @@ static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2
         for (int b = 0; b < m; b++) { w->Ar[a][b] = A[i][ev->F[b]]; w->Br[a][b] = B[ev->L[a]][ev->L[b]]; }
     }
     for (int a = 0; a < m; a++) for (int b = m; b < ((m + 3) & ~3); b++) w->Br[a][b] = 0;
-    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
-        int i = ev->F[a], j = ev->L[b]; double s = 0;
-        for (int k = 0; k < N; k++) if (nd->rc[k] >= 0) s += A[i][k] * B[j][nd->rc[k]];
-        w->Cr[a][b] = 2 * s + C0[i][j];
+    {   /* Cr = 2 Afix Bfix^T + C0: Afix[a][t] = A[F[a]][k_t], Bfix[b][t] = B[L[b]][rc[k_t]] over the fixed k_t (same summation order as a loop over k) */
+        int kf[NMAX], nf = 0; for (int k = 0; k < N; k++) if (nd->rc[k] >= 0) kf[nf++] = k;
+        double Af[NMAX][NMAX], Bf[NMAX][NMAX];
+        for (int a = 0; a < m; a++) { const double *Ai = A[ev->F[a]], *Bj = B[ev->L[a]];
+            for (int t = 0; t < nf; t++) { Af[a][t] = Ai[kf[t]]; Bf[a][t] = Bj[nd->rc[kf[t]]]; } }
+        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
+            double s = 0; const double *x = Af[a], *y = Bf[b];
+            for (int t = 0; t < nf; t++) s += x[t] * y[t];
+            w->Cr[a][b] = 2 * s + C0[ev->F[a]][ev->L[b]];
+        }
     }
     double target = prune_thr(g_ub);   /* integer data: fathom if bound > ub - 1 */
     if (m <= 1) {
@@ -1499,6 +1535,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-updstop")) opt_updstop = 1;
         else if (!strcmp(argv[a], "-nfwx")) opt_nfwx = atof(argv[++a]);
         else if (!strcmp(argv[a], "-warm")) opt_warm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-alap")) opt_alap = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-monge")) opt_monge = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-spfuse")) opt_spfuse = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-lacap")) opt_lacap = atoi(argv[++a]);

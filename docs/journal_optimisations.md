@@ -41,6 +41,9 @@ Chaque itération parcourait huit fois des matrices m × m. Identités utilisée
 - duales du LAP : u_i = c_{i,σ(i)} − v_{σ(i)} (écarts complémentaires) au lieu d'un minimum par ligne.
 Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nombre de nœuds identique.
 
+### A7. Terme linéaire Cr en produit dense (nug22 × 1,04, même arbre)
+Cr[a][b] = 2 Σ_k A[F_a][k] B[L_b][π(k)] + C0, la somme portant sur les usines k déjà fixées. Le code parcourait les N usines avec un test par k. On rassemble d'abord les colonnes fixées dans deux tableaux m × n_f (Af[a][t] = A[F_a][k_t], Bf[b][t] = B[L_b][π(k_t)]), puis Cr = 2 Af Bfᵀ + C0 en boucles contiguës. Les termes sont sommés dans le même ordre, donc le résultat est identique et l'arbre aussi. Gain plus grand attendu sur nug30 (N et le nombre d'usines fixées augmentent).
+
 ## Chantier B : algorithme
 
 ### B1. Mise à jour de S et T, et itérations de FW × 0,7 (banc × 1,19 ; nug20 × 1,11 ; nug22 × 1,20)
@@ -114,6 +117,9 @@ gprof, LAP et A·P·B non incorporés : LAP par plus courts chemins 56 %, A·P·
 | Recherche du minimum dans la passe de relaxation du LAP | une seule passe sur les colonnes au lieu de deux par étape de Dijkstra, même résultat au bit près | nug17 6,3 s → 9,2 s : la boucle fusionnée n'est plus vectorisée |
 | LAP de mise en place de S, T en forme close | les coûts λ_i μ_j sont de Monge : affectation i → k − 1 − i et duales en escalier | autres duales optimales, donc autres S, T : nug17 57 085 → 64 095 nœuds, plus lent |
 | Boucles du LAP alignées sur 4 colonnes | colonnes de remplissage à coût infini, sans reste scalaire | nug20 61,8 s → 61,2 s, dans le bruit |
+| LAP approché une itération sur k | affectation gloutonne ; duales u_i = min_j (c_ij − v_j), réalisables, donc borne valide ; LAP exact si la direction n'est pas une descente ; U et la meilleure borne pris seulement sur les LAP exacts | k = 2 : nug17 6,09 s → 6,10 s, nug20 × 1,03 ; k = 3 : nug17 × 1,0. Les directions approchées demandent plus d'itérations |
+| Itérations de FW × 0,5 et × 0,4 au lieu de × 0,7, avec le départ au point du père | | nug20 62,1 s → 56,9 s → 53,5 s, mais nug22 120,6 s → 123,8 s (+18 % de nœuds à × 0,5) ; × 0,7 gardé |
+| A·P·B par symétrie | les matrices de nug sont symétriques | sans objet : Ar P Br n'est pas symétrique (P ne l'est pas) |
 | Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
 
 ## Vitesse d'un cœur de 2026 face à la HP C3000
