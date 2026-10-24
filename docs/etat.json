@@ -1,12 +1,12 @@
 {
- "updated": 1792856393.8354337,
+ "updated": 1792856428.350743,
  "machine": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
   "cores": 4,
   "load": [
-   2.1064453125,
-   2.3427734375,
-   2.330078125
+   2.0576171875,
+   2.30322265625,
+   2.31640625
   ],
   "maxj": 2
  },
@@ -768,12 +768,12 @@
    "start": 1792856376.5770032,
    "end": null,
    "progress": {
-    "elapsed_s": 15.0,
-    "dives_done": 6,
+    "elapsed_s": 47.5,
+    "dives_done": 19,
     "dives_total": 400,
-    "nodes": 43,
-    "est_nodes": 6817300.0,
-    "est_time_s": 9594.3,
+    "nodes": 136,
+    "est_nodes": 8299900.0,
+    "est_time_s": 8296.0,
     "final": 0
    }
   },
