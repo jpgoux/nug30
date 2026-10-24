@@ -1,0 +1,832 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<title>NUG30 Laboratory</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans+Condensed:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a rust "journal cover" band on top, tabbed notebook below; data in mono, prose in a book serif. */
+:root{
+  --rust-0:#4a190c; --rust-1:#7a2a14; --terra:#c8714f; --terra-soft:#f1d9cc;
+  --sun:#f8ea8e; --sun-soft:#fdf7d2; --navy:#1d2c52;
+  --bg:#fbf8f1; --surface:#ffffff; --ink:#2a1a14; --muted:#6e5b52; --line:#e6dcd0;
+  --ok:#2f7d4a; --ok-soft:#e1f1e6; --warn:#b5701c; --warn-soft:#f8ead2; --bad:#a83a2a; --bad-soft:#f6dfda; --run:#1d5fa8; --run-soft:#dde9f7;
+  --display:"Fira Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --rust-0:#2a0e07; --rust-1:#5a1f0f; --terra:#e08e6c; --terra-soft:#3a2219;
+  --sun:#f3e27a; --sun-soft:#302a12; --navy:#9fb4e8;
+  --bg:#17110e; --surface:#211915; --ink:#f1e7df; --muted:#b8a497; --line:#3a2d26;
+  --ok:#5bbd7c; --ok-soft:#173022; --warn:#e6a654; --warn-soft:#352614; --bad:#ec8a77; --bad-soft:#3a1d18; --run:#7fb2ec; --run-soft:#16263b; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --rust-0:#2a0e07; --rust-1:#5a1f0f; --terra:#e08e6c; --terra-soft:#3a2219;
+  --sun:#f3e27a; --sun-soft:#302a12; --navy:#9fb4e8;
+  --bg:#17110e; --surface:#211915; --ink:#f1e7df; --muted:#b8a497; --line:#3a2d26;
+  --ok:#5bbd7c; --ok-soft:#173022; --warn:#e6a654; --warn-soft:#352614; --bad:#ec8a77; --bad-soft:#3a1d18; --run:#7fb2ec; --run-soft:#16263b; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.6;margin:0}
+.wrap{max-width:1080px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3,h4{font-family:var(--display);text-wrap:balance;line-height:1.15;margin:0}
+h2{font-size:1.75rem;color:var(--rust-1);margin-block:1.6rem .6rem}
+:root[data-theme="dark"] h2{color:var(--terra)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) h2{color:var(--terra)}}
+h3{font-size:1.2rem;margin-block:1.2rem .4rem}
+p{margin:.5rem 0;max-width:72ch}
+a{color:var(--run)}
+code,.mono{font-family:var(--mono);font-size:.86em}
+small,.small{font-size:.85rem;color:var(--muted)}
+
+/* cover band */
+.cover{background:linear-gradient(115deg,var(--rust-0),var(--rust-1) 70%,#8d3418);color:#fff}
+.cover .wrap{display:grid;grid-template-columns:1fr 230px;gap:28px;padding-block:28px 22px;align-items:center}
+.crumbs{font-family:var(--display);font-size:.95rem;opacity:.9;letter-spacing:.02em}
+.cover h1{font-size:clamp(2rem,5vw,3.3rem);margin:.3rem 0 .5rem;color:#fff}
+.cover .ref{font-family:var(--display);font-size:1.1rem;opacity:.95}
+.cover .authors{font-family:var(--display);font-size:1.05rem;margin-top:.6rem}
+.cover .authors b{border-bottom:2px solid var(--sun);font-weight:600}
+.prize{display:inline-block;margin-top:.7rem;background:var(--sun);color:#3a1a0c;font-family:var(--display);font-weight:600;padding:.2rem .7rem;border-radius:3px;font-size:.95rem}
+.journal{background:#fffbe0;border-radius:10px;aspect-ratio:3/4;max-width:100%;position:relative;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,.35)}
+.journal svg{width:100%;height:100%;display:block}
+
+/* tabs */
+.tabs{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+.tabs .wrap{display:flex;gap:2px;overflow-x:auto;scrollbar-width:thin}
+.tabs button{font-family:var(--display);font-size:1rem;font-weight:600;color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:.75rem .8rem;cursor:pointer;white-space:nowrap}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--terra)}
+.tabs button:focus-visible{outline:2px solid var(--run);outline-offset:-2px}
+main .wrap{padding-block:8px 60px}
+section[hidden]{display:none}
+
+/* blocks */
+.lead{font-size:1.12rem;max-width:68ch}
+.keys{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:1rem 0}
+.key{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--terra);border-radius:6px;padding:.8rem 1rem;min-width:0}
+.key b{display:block;font-family:var(--display);font-size:1.05rem;margin-bottom:.2rem}
+.key.sun{border-top-color:var(--sun)} .key.navy{border-top-color:var(--navy)} .key.ok{border-top-color:var(--ok)}
+.note{background:var(--sun-soft);border-left:4px solid var(--sun);padding:.6rem .9rem;border-radius:4px;margin:1rem 0;max-width:80ch}
+.warnbox{background:var(--warn-soft);border-left:4px solid var(--warn);padding:.6rem .9rem;border-radius:4px;margin:1rem 0;max-width:80ch}
+.src{font-family:var(--display);font-size:.78rem;font-weight:600;letter-spacing:.04em;padding:.05rem .4rem;border-radius:3px;background:var(--terra-soft);color:var(--rust-1);vertical-align:1px;white-space:nowrap}
+:root[data-theme="dark"] .src{color:var(--terra)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .src{color:var(--terra)}}
+.src.full{background:var(--ok-soft);color:var(--ok)}
+ul.tight{margin:.3rem 0;padding-left:1.2rem} ul.tight li{margin:.15rem 0}
+.formula{font-family:var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.7rem 1rem;overflow-x:auto;font-size:.95rem}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:22px} .two>*{min-width:0}
+
+/* tables */
+.tbl{overflow-x:auto;margin:.6rem 0;border:1px solid var(--line);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.92rem}
+th,td{padding:.45rem .6rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-family:var(--display);font-weight:600;background:var(--sun-soft);white-space:nowrap}
+td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+
+/* live */
+.banner{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:.7rem 1rem;margin:1rem 0;font-family:var(--display)}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block;background:var(--muted);margin-right:6px;vertical-align:1px}
+.dot.live{background:var(--ok);box-shadow:0 0 0 0 var(--ok);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,125,74,.5)}70%{box-shadow:0 0 0 8px rgba(47,125,74,0)}100%{box-shadow:0 0 0 0 rgba(47,125,74,0)}}
+@media (prefers-reduced-motion: reduce){.dot.live{animation:none}}
+.pill{font-family:var(--display);font-weight:600;font-size:.8rem;padding:.1rem .5rem;border-radius:20px;white-space:nowrap}
+.pill.running{background:var(--run-soft);color:var(--run)} .pill.done{background:var(--ok-soft);color:var(--ok)}
+.pill.pending{background:var(--line);color:var(--muted)} .pill.failed,.pill.interrupted{background:var(--bad-soft);color:var(--bad)}
+.check{color:var(--ok);font-weight:600} .cross{color:var(--bad);font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.job{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--run);border-radius:6px;padding:.7rem .9rem;min-width:0}
+.job h4{font-size:1.05rem}
+.job .meta{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+.job details{margin-top:.5rem}
+.job summary{cursor:pointer;font-family:var(--display);font-weight:600;color:var(--rust-1);font-size:.92rem}
+.pbar{height:10px;background:var(--terra-soft);border-radius:5px;overflow:hidden;margin:.4rem 0}
+.pbar i{display:block;height:100%;background:var(--terra)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:.15rem .8rem;font-size:.88rem;margin-top:.3rem}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-size:.84rem}
+.bars{display:flex;align-items:flex-end;gap:2px;height:46px;margin-top:6px}
+.bars span{flex:1;background:var(--terra);min-height:1px;border-radius:1px 1px 0 0}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto}
+.chart svg{display:block;width:100%;height:auto;min-width:520px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-family:var(--display);font-size:.9rem;margin:.4rem 0}
+.legend i{display:inline-block;width:14px;height:4px;border-radius:2px;margin-right:6px;vertical-align:3px}
+.timeline{border-left:3px solid var(--terra);margin:1rem 0 1rem .4rem;padding-left:1.1rem}
+.timeline .ev{position:relative;margin:0 0 1rem}
+.timeline .ev::before{content:"";position:absolute;left:-1.55rem;top:.45rem;width:11px;height:11px;border-radius:50%;background:var(--surface);border:3px solid var(--terra)}
+.timeline .yr{font-family:var(--display);font-weight:700;color:var(--rust-1);font-size:1.05rem}
+:root[data-theme="dark"] .timeline .yr{color:var(--terra)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .timeline .yr{color:var(--terra)}}
+.grid30{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;max-width:260px}
+.grid30 span{aspect-ratio:1;border-radius:4px;background:var(--sun-soft);border:1px solid var(--line);display:grid;place-items:center;font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.grid30 span.j{background:var(--terra);color:#fff;border-color:var(--terra)}
+@media (max-width:760px){.cover .wrap{grid-template-columns:1fr}.journal{max-width:190px}.rightcol{align-items:flex-start;order:-1}.rightcol .journal{display:none}.two{grid-template-columns:1fr}}
+</style>
+
+<style>
+:root:not([data-lang="en"]) [data-l="en"]{display:none!important}
+:root[data-lang="en"] [data-l="fr"]{display:none!important}
+.rightcol{display:flex;flex-direction:column;align-items:flex-end;gap:10px;min-width:0}
+.rightcol .journal{width:100%}
+#perinst td{white-space:nowrap}#perinst td.small{white-space:normal;min-width:9rem}
+th.grp{text-align:center;border-bottom:2px solid var(--terra)}
+details summary{cursor:pointer;font-family:var(--display);font-weight:600;margin:.8rem 0 .4rem}
+.crumbrow{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+@media (max-width:760px){.rightcol{align-items:flex-start}}
+.langsw{display:inline-flex;border:1px solid rgba(255,255,255,.6);border-radius:20px;overflow:hidden;margin-bottom:0}
+.langsw button{background:none;border:0;color:#fff;font-family:var(--display);font-weight:600;padding:.2rem .7rem;cursor:pointer;font-size:.9rem}
+.langsw button[aria-pressed="true"]{background:var(--sun);color:#3a1a0c}
+.langsw button:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
+.prizewrap{position:relative;display:inline-block;margin-top:.7rem}
+button.prize{border:0;cursor:pointer;margin-top:0}
+button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
+.prizepop{position:absolute;left:0;top:calc(100% + 8px);z-index:20;width:min(460px,calc(100vw - 32px));background:var(--surface);color:var(--ink);border:1px solid var(--line);border-top:4px solid var(--sun);border-radius:8px;padding:.8rem 1rem;box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:.92rem;line-height:1.5}
+.prizepop .pz-list{margin-top:.5rem}
+.prizepop{max-height:70vh;overflow:auto}
+</style>
+
+<header class="cover">
+  <div class="wrap">
+    <div>
+      <div class="crumbrow"><div class="crumbs">Mathematical Programming · Volume 91 (2002), pp. 563-588</div><div class="langsw" role="group" aria-label="Langue / Language"><button id="lang-fr" aria-pressed="true">FR</button><button id="lang-en" aria-pressed="false">EN</button></div></div>
+      <h1>NUG30 Laboratory</h1>
+      <div class="ref" lang="fr" data-l="fr">Refaire en 2026, sur une seule machine, le calcul de <i>Solving large quadratic assignment problems on computational grids</i>, puis aller plus loin.</div>
+      <div class="ref" lang="en" data-l="en">Redoing in 2026, on a single machine, the computation of <i>Solving large quadratic assignment problems on computational grids</i>, and then going further.</div>
+      <div class="authors"><b>Kurt Anstreicher</b>, <b>Nathan Brixius</b>, <b>Jean-Pierre Goux</b> &amp; <b>Jeff Linderoth</b></div>
+      <div class="prizewrap"><button class="prize" id="prizebtn" aria-expanded="false" aria-controls="prizepop"><span data-l="fr">Prix SIAG/OPT de la SIAM, 2002</span><span data-l="en">SIAM SIAG/OPT Prize, 2002</span> <span aria-hidden="true">ⓘ</span></button>
+      <div class="prizepop" id="prizepop" hidden>
+        <div lang="fr" data-l="fr">
+          <b>La SIAM</b> (Society for Industrial and Applied Mathematics, fondée en 1951 aux États-Unis) est la principale société savante de mathématiques appliquées. Son groupe d'activité sur l'optimisation (SIAG/OPT) décerne <b>tous les trois ans</b> un prix au <b>meilleur article d'optimisation</b> publié dans une revue à comité de lecture pendant les quatre années civiles précédentes. Il est remis à la conférence SIAM sur l'optimisation.
+          <div class="pz-list"><b>Lauréats</b>
+            <ul class="tight">
+              <li><b>2002 : Kurt Anstreicher, Nathan Brixius, Jean-Pierre Goux, Jeff Linderoth</b>, « Solving large quadratic assignment problems on computational grids », <i>Math. Programming</i> 91 (2002)</li>
+            </ul>
+            <b>Historique</b>
+            <ul class="tight">
+              <li>1996 : Dimitris Bertsimas, Michel Goemans</li>
+              <li>1999 : Michel Goemans, David Williamson (approximation de MAX-CUT par programmation semi-définie)</li>
+              <li><b>2002 : Anstreicher, Brixius, Goux, Linderoth (NUG30)</b></li>
+              <li>2005, 2008, 2011 : non retrouvés</li>
+              <li>2014 : Yinyu Ye</li>
+              <li>2017 : Jérôme Bolte, Shoham Sabach, Marc Teboulle, « Proximal alternating linearized minimization for nonconvex and nonsmooth problems », <i>Math. Programming</i> (2014)</li>
+              <li>2020 : Hamza Fawzi, Pablo Parrilo, James Saunderson, « Semidefinite approximations of the matrix logarithm », <i>Found. Comput. Math.</i> (2019)</li>
+              <li>2023 : Damek Davis, Dmitriy Drusvyatskiy</li>
+              <li>2026 : Nicolas Boumal, Andrew McRae, « Benign landscapes of low-dimensional relaxations for orthogonal synchronization on general graphs »</li>
+            </ul>
+          </div>
+          <div class="small">Liste établie d'après SIAM News (mai 2026) et des pages d'universités (MIT, Washington, Tel Aviv, IPAM) <span class="src">lu via résumé</span>. La page officielle d'historique de la SIAM n'a pas pu être lue : les lauréats 2005, 2008 et 2011 manquent, et le titre de l'article de 2014 n'est pas vérifié. Depuis 2023, le groupe décerne aussi un prix Test of Time (2026 : Lorenz Biegler et Andreas Wächter, pour Ipopt).</div>
+        </div>
+        <div lang="en" data-l="en">
+          <b>SIAM</b> (Society for Industrial and Applied Mathematics, founded in 1951 in the United States) is the main learned society for applied mathematics. Its Activity Group on Optimization (SIAG/OPT) awards, <b>every three years</b>, a prize for the <b>most outstanding paper in optimization</b> published in a peer-reviewed journal in the four preceding calendar years. It is presented at the SIAM Conference on Optimization.
+          <div class="pz-list"><b>Recipients</b>
+            <ul class="tight">
+              <li><b>2002: Kurt Anstreicher, Nathan Brixius, Jean-Pierre Goux, Jeff Linderoth</b>, "Solving large quadratic assignment problems on computational grids", <i>Math. Programming</i> 91 (2002)</li>
+            </ul>
+            <b>History</b>
+            <ul class="tight">
+              <li>1996: Dimitris Bertsimas, Michel Goemans</li>
+              <li>1999: Michel Goemans, David Williamson (MAX-CUT approximation by semidefinite programming)</li>
+              <li><b>2002: Anstreicher, Brixius, Goux, Linderoth (NUG30)</b></li>
+              <li>2005, 2008, 2011: not found</li>
+              <li>2014: Yinyu Ye</li>
+              <li>2017: Jérôme Bolte, Shoham Sabach, Marc Teboulle, "Proximal alternating linearized minimization for nonconvex and nonsmooth problems", <i>Math. Programming</i> (2014)</li>
+              <li>2020: Hamza Fawzi, Pablo Parrilo, James Saunderson, "Semidefinite approximations of the matrix logarithm", <i>Found. Comput. Math.</i> (2019)</li>
+              <li>2023: Damek Davis, Dmitriy Drusvyatskiy</li>
+              <li>2026: Nicolas Boumal, Andrew McRae, "Benign landscapes of low-dimensional relaxations for orthogonal synchronization on general graphs"</li>
+            </ul>
+          </div>
+          <div class="small">List compiled from SIAM News (May 2026) and university pages (MIT, Washington, Tel Aviv, IPAM) <span class="src">read via summary</span>. The official SIAM history page could not be read: the 2005, 2008 and 2011 recipients are missing, and the 2014 paper title is not verified. Since 2023 the group also gives a Test of Time Award (2026: Lorenz Biegler and Andreas Wächter, for Ipopt).</div>
+        </div>
+      </div></div>
+    </div>
+    <div class="rightcol">
+    <div class="journal" aria-hidden="true">
+      <svg viewBox="0 0 300 400" preserveAspectRatio="none">
+        <rect width="300" height="400" fill="#fffbe0"/>
+        <rect x="150" width="150" height="400" fill="#f8ea8e"/>
+        <polygon points="0,150 150,330 0,330" fill="#c8714f"/>
+        <polygon points="300,120 150,330 300,370" fill="#c8714f"/>
+        <rect x="16" y="78" width="268" height="20" fill="#1d2c52"/>
+        <text x="16" y="44" font-family="Fira Sans Condensed, Arial Narrow, sans-serif" font-size="27" font-weight="600" fill="#1d2c52">Mathematical</text>
+        <text x="16" y="72" font-family="Fira Sans Condensed, Arial Narrow, sans-serif" font-size="27" font-weight="600" fill="#1d2c52">Programming</text>
+        <text x="22" y="92" font-family="Fira Sans Condensed, Arial Narrow, sans-serif" font-size="10.5" fill="#fff">nug30 = 6124 · 11 892 208 412 nodes · June 2000</text>
+        <g transform="translate(176,200)" fill="#4a190c" opacity=".85">
+          <circle cx="0" cy="0" r="4"/><circle cx="18" cy="0" r="4"/><circle cx="36" cy="0" r="4"/><circle cx="54" cy="0" r="4"/><circle cx="72" cy="0" r="4"/><circle cx="90" cy="0" r="4"/>
+          <circle cx="0" cy="18" r="4"/><circle cx="18" cy="18" r="4"/><circle cx="36" cy="18" r="4"/><circle cx="54" cy="18" r="4"/><circle cx="72" cy="18" r="4"/><circle cx="90" cy="18" r="4"/>
+          <circle cx="0" cy="36" r="4"/><circle cx="18" cy="36" r="4"/><circle cx="36" cy="36" r="4"/><circle cx="54" cy="36" r="4"/><circle cx="72" cy="36" r="4"/><circle cx="90" cy="36" r="4"/>
+          <circle cx="0" cy="54" r="4"/><circle cx="18" cy="54" r="4"/><circle cx="36" cy="54" r="4"/><circle cx="54" cy="54" r="4"/><circle cx="72" cy="54" r="4"/><circle cx="90" cy="54" r="4"/>
+          <circle cx="0" cy="72" r="4"/><circle cx="18" cy="72" r="4"/><circle cx="36" cy="72" r="4"/><circle cx="54" cy="72" r="4"/><circle cx="72" cy="72" r="4"/><circle cx="90" cy="72" r="4"/>
+        </g>
+        <text x="176" y="300" font-family="JetBrains Mono, monospace" font-size="10" fill="#4a190c">5 × 6 grid</text>
+      </svg>
+    </div>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Sections">
+  <div class="wrap" role="tablist">
+    <button role="tab" id="t-live" aria-controls="live" aria-selected="true"><span data-l="fr">En direct</span><span data-l="en">Live</span></button>
+    <button role="tab" id="t-repro" aria-controls="repro" aria-selected="false"><span data-l="fr">Notre reproduction</span><span data-l="en">Our reproduction</span></button>
+    <button role="tab" id="t-qap" aria-controls="qap" aria-selected="false"><span data-l="fr">Le problème</span><span data-l="en">The problem</span></button>
+    <button role="tab" id="t-2000" aria-controls="p2000" aria-selected="false"><span data-l="fr">NUG30 en 2000</span><span data-l="en">NUG30 in 2000</span></button>
+    <button role="tab" id="t-since" aria-controls="since" aria-selected="false"><span data-l="fr">Depuis 2002</span><span data-l="en">Since 2002</span></button>
+    <button role="tab" id="t-lib" aria-controls="lib" aria-selected="false">QAPLIB</button>
+    <button role="tab" id="t-ideas" aria-controls="ideas" aria-selected="false"><span data-l="fr">Pistes</span><span data-l="en">Next steps</span></button>
+  </div>
+</nav>
+
+<main><div class="wrap">
+
+<!-- ============ LIVE ============ -->
+<section id="live" role="tabpanel" aria-labelledby="t-live">
+  <h2><span data-l="fr">Ce qui tourne en ce moment</span><span data-l="en">What is running right now</span></h2>
+  <div class="banner" id="banner"><span><span class="dot" id="dot"></span><span id="bannertxt">…</span></span><span id="machine" class="small"></span></div>
+  <p class="small" lang="fr" data-l="fr">La page relit toutes les 10 secondes le fichier d'état écrit par le lanceur de calculs (<code>nug30/etat/etat.json</code> dans les fichiers du projet). Tous les calculs tournent en C, sur un seul processeur à 4 cœurs, sans aucun modèle de langage dans la boucle.</p>
+  <p class="small" lang="en" data-l="en">The page re-reads, every 10 seconds, the state file written by the job runner (<code>nug30/etat/etat.json</code> in the project files). All computations run in C on a single 4-core processor, with no language model in the loop.</p>
+
+  <h3><span data-l="fr">Calculs en cours</span><span data-l="en">Running jobs</span></h3>
+  <div class="cards" id="running"></div>
+
+  <h3>Agents</h3>
+  <div class="cards" id="agents"></div>
+
+  <h3><span data-l="fr">Par instance : estimation de Knuth et résolution</span><span data-l="en">Per instance: Knuth estimate and solve</span></h3>
+  <div class="tbl"><table>
+    <thead>
+      <tr><th rowspan="2">Instance</th><th colspan="3" class="grp"><span data-l="fr">Estimation de Knuth (pré-traitement)</span><span data-l="en">Knuth estimate (preprocessing)</span></th><th colspan="4" class="grp"><span data-l="fr">Résolution (B&amp;B complet)</span><span data-l="en">Solve (full B&amp;B)</span></th><th rowspan="2" class="num"><span data-l="fr">Prédit/réel</span><span data-l="en">Pred./actual</span></th><th rowspan="2"><span data-l="fr">Papier (C3000)</span><span data-l="en">Paper (C3000)</span></th></tr>
+      <tr><th><span data-l="fr">Statut</span><span data-l="en">Status</span></th><th class="num"><span data-l="fr">Nœuds prédits</span><span data-l="en">Predicted nodes</span></th><th class="num"><span data-l="fr">Durée</span><span data-l="en">Time</span></th><th><span data-l="fr">Statut</span><span data-l="en">Status</span></th><th class="num"><span data-l="fr">Nœuds</span><span data-l="en">Nodes</span></th><th class="num"><span data-l="fr">Durée</span><span data-l="en">Time</span></th><th class="num">Optimum</th></tr>
+    </thead>
+    <tbody id="perinst"></tbody>
+  </table></div>
+  <p class="small" lang="fr" data-l="fr">L'estimation n'utilise rien de la résolution (même stratégie, même borne opt+1, tirages aléatoires indépendants) : la faire avant ou après ne change rien à sa valeur. Jusqu'à nug21, elle a été lancée après la résolution et sert de calibration à l'aveugle ; à partir de nug22 elle passe avant, comme ce sera le cas pour nug30. L'ordre réel est indiqué par ① et ②.</p>
+  <p class="small" lang="en" data-l="en">The estimate uses nothing from the solve (same strategy, same opt+1 bound, independent random draws), so running it before or after does not change its value. Up to nug21 it was run after the solve and serves as blind calibration; from nug22 on it runs first, as it will for nug30. The actual order is shown by ① and ②.</p>
+
+  <details><summary><span data-l="fr">File complète de la campagne (ordre d'exécution)</span><span data-l="en">Full campaign queue (execution order)</span></summary>
+  <div class="tbl"><table>
+    <thead><tr><th><span data-l="fr">Statut</span><span data-l="en">Status</span></th><th><span data-l="fr">Calcul</span><span data-l="en">Job</span></th><th class="num"><span data-l="fr">Nœuds</span><span data-l="en">Nodes</span></th><th class="num"><span data-l="fr">Durée</span><span data-l="en">Time</span></th><th class="num"><span data-l="fr">Optimum trouvé</span><span data-l="en">Optimum found</span></th><th><span data-l="fr">Comparaison avec le papier</span><span data-l="en">Comparison with the paper</span></th></tr></thead>
+    <tbody id="queue"></tbody>
+  </table></div></details>
+  <p class="small" lang="fr" data-l="fr">Conditions « du papier » : borne initiale = optimum connu + 1, élagage seulement si la borne atteint cette valeur, stratégie de branchement A à D du papier de Brixius et Anstreicher (2001). Les temps du papier sont ceux d'une station HP 9000 C3000 (2000).</p>
+  <p class="small" lang="en" data-l="en">"Paper conditions": initial incumbent = known optimum + 1, pruning only when the bound reaches that value, branching strategies A to D of Brixius and Anstreicher (2001). Paper times are for an HP 9000 C3000 workstation (2000).</p>
+</section>
+
+<!-- ============ REPRO ============ -->
+<section id="repro" role="tabpanel" aria-labelledby="t-repro" hidden>
+<div lang="fr" data-l="fr">
+  <h2>Notre reproduction</h2>
+  <p class="lead">Nous refaisons d'abord <b>à l'identique</b> l'algorithme de 2000 : borne QPB calculée par Frank-Wolfe, LAP de Jonker-Volgenant, branchement polytomique avec les règles 2, 3 et 4, symétries de la grille. Nous validons sur la série NUG de QAPLIB avant d'estimer, puis d'attaquer, NUG30.</p>
+  <div class="keys">
+    <div class="key"><b>Machine</b>Un serveur Intel Xeon de 5e génération (Emerald Rapids) à 2,1 GHz, 4 cœurs, 15 Go, sans GPU. Chaque calcul de la campagne utilise un seul cœur.</div>
+    <div class="key sun"><b>Langage</b>C (gcc -O3 -march=native) avec LAPACK pour les valeurs propres.</div>
+    <div class="key navy"><b>Validation</b>Chaque instance doit retrouver et prouver l'optimum publié dans QAPLIB. C'est le cas de nug12 à nug18.</div>
+  </div>
+  <h3>Premier résultat : nug18</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Calcul</th><th class="num">Nœuds</th><th class="num">Temps</th><th>Machine</th></tr></thead>
+    <tbody>
+      <tr><td>Brixius et Anstreicher, stratégie C (papier OMS 2001, table 4)</td><td class="num">251 470</td><td class="num">69,2 min</td><td>HP 9000 C3000</td></tr>
+      <tr><td>Notre code, stratégie C, mêmes conditions</td><td class="num">206 272</td><td class="num">158 s</td><td>1 cœur Xeon 2,1 GHz</td></tr>
+      <tr><td>Notre code, branchement simple (règle 2 seule)</td><td class="num">342 551</td><td class="num">131 s</td><td>1 cœur Xeon 2,1 GHz</td></tr>
+    </tbody>
+  </table></div>
+  <p>Même arbre à 20 % près, et <b>environ 26 fois moins de temps</b> sur un cœur de 2026 que sur la station de 2000.</p>
+  <div class="note"><b>Pourquoi seulement 26 fois, et pas un million ?</b> La vitesse d'un seul cœur n'a gagné qu'un facteur de l'ordre de 30 à 60 depuis 2000 (la C3000 avait un SPECint95 de 31,8). Les gains énormes sont venus du nombre de cœurs, des GPU et des algorithmes. Nos mesures ont été faites sur une machine chargée par d'autres calculs : une mesure propre, un calcul à la fois, est prévue.</div>
+</div>
+<div lang="en" data-l="en">
+  <h2>Our reproduction</h2>
+  <p class="lead">We first redo the 2000 algorithm <b>as it was</b>: the QPB bound computed by Frank-Wolfe, the Jonker-Volgenant LAP, polytomic branching with rules 2, 3 and 4, and grid symmetries. We validate on the QAPLIB NUG series before estimating, then attacking, NUG30.</p>
+  <div class="keys">
+    <div class="key"><b>Machine</b>One 5th-generation Intel Xeon server (Emerald Rapids) at 2.1 GHz, 4 cores, 15 GB, no GPU. Each campaign job uses a single core.</div>
+    <div class="key sun"><b>Language</b>C (gcc -O3 -march=native) with LAPACK for eigenvalues.</div>
+    <div class="key navy"><b>Validation</b>Each instance must find and prove the optimum published in QAPLIB. This holds for nug12 to nug18.</div>
+  </div>
+  <h3>First result: nug18</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Run</th><th class="num">Nodes</th><th class="num">Time</th><th>Machine</th></tr></thead>
+    <tbody>
+      <tr><td>Brixius and Anstreicher, strategy C (OMS 2001 paper, Table 4)</td><td class="num">251,470</td><td class="num">69.2 min</td><td>HP 9000 C3000</td></tr>
+      <tr><td>Our code, strategy C, same conditions</td><td class="num">206,272</td><td class="num">158 s</td><td>1 Xeon core, 2.1 GHz</td></tr>
+      <tr><td>Our code, simple branching (rule 2 only)</td><td class="num">342,551</td><td class="num">131 s</td><td>1 Xeon core, 2.1 GHz</td></tr>
+    </tbody>
+  </table></div>
+  <p>The same tree within 20%, and <b>about 26 times less time</b> on a 2026 core than on the 2000 workstation.</p>
+  <div class="note"><b>Why only 26 times, and not a million?</b> Single-core speed has improved by a factor of roughly 30 to 60 since 2000 (the C3000 had a SPECint95 of 31.8). The huge gains came from core counts, GPUs and algorithms. Our timings were taken on a machine loaded with other jobs; a clean measurement, one job at a time, is planned.</div>
+</div>
+
+  <h3><span data-l="fr">Temps de résolution de la série NUG</span><span data-l="en">Solution times for the NUG series</span></h3>
+  <div class="legend"><span><i style="background:var(--terra)"></i><span data-l="fr">Papiers de 2001-2002 (HP C3000, minutes)</span><span data-l="en">2001-2002 papers (HP C3000, minutes)</span></span><span><i style="background:var(--run)"></i><span data-l="fr">Notre code en 2026 (1 cœur, minutes)</span><span data-l="en">Our code in 2026 (1 core, minutes)</span></span></div>
+  <div class="chart" id="chart-time"></div>
+  <p class="small" lang="fr" data-l="fr">Échelle logarithmique. Pour nug27, nug28 et nug30, le temps de 2000 est le temps de grille converti en années de C3000 (table 7 de l'article). Nos points apparaissent au fil de la campagne.</p>
+  <p class="small" lang="en" data-l="en">Log scale. For nug27, nug28 and nug30 the 2000 time is the grid time converted to C3000-years (Table 7 of the article). Our points appear as the campaign progresses.</p>
+
+<div lang="fr" data-l="fr">
+  <h3>Ce qui est identique, ce qui diffère</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Élément</th><th>En 2000</th><th>Ici</th></tr></thead>
+    <tbody>
+      <tr><td>Borne</td><td>QPB (Anstreicher et Brixius), Frank-Wolfe depuis X₀ = ee<sup>T</sup>/n</td><td>Identique ; vérifié : z₀ = PB (lemme 2.1 du papier)</td></tr>
+      <tr><td>Arrêt de Frank-Wolfe</td><td>z<sub>k</sub> &gt; v, ou f(X<sub>k</sub>) &lt; v et k ≥ NFW2, ou k = NFW1</td><td>Identique</td></tr>
+      <tr><td>Matrices S et T</td><td>Mise à jour toutes les 30 itérations (procédure de la section 6 d'un papier que nous n'avons pas)</td><td><b>Pas de mise à jour</b> ; notre essai par problème de transport n'améliore la borne que de 0,3 % sur nug12</td></tr>
+      <tr><td>LAP</td><td>Jonker-Volgenant, gradient arrondi en entiers (OMS 2001), puis en flottants (2002)</td><td>Jonker-Volgenant en flottants, <b>démarré à chaud</b> avec les prix de l'itération précédente (ajout de notre part)</td></tr>
+      <tr><td>Branchement</td><td>Règles 1 à 4, stratégies A à D selon la profondeur</td><td>Identique (règles 2, 3, 4 ; stratégies A, B, C, D)</td></tr>
+      <tr><td>Symétries</td><td>Ensembles J1, puis paires (J2, J3) codés pour chaque grille</td><td>Groupe d'automorphismes de la matrice des distances calculé automatiquement, et stabilisateur recalculé à chaque nœud</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Où passe le temps</h3>
+  <div class="keys">
+    <div class="key"><b>80 % dans le LAP</b>Profil sur nug30 à la racine : 79 % du temps dans le LAP, 17 % dans les produits de matrices.</div>
+    <div class="key ok"><b>× 2 avec le démarrage à chaud</b>Itération de Frank-Wolfe à n = 30 : 105 µs (méthode hongroise), 50 µs (Jonker-Volgenant à chaud).</div>
+    <div class="key sun"><b>Une piste plus forte</b>Un décalage des diagonales optimisé à la racine porte la borne de nug30 de 5 341 à 5 510 (publié : 5 365), mais grossit l'arbre de nug18 (497 265 nœuds au lieu de 342 551). Il faudrait le recalculer à chaque nœud.</div>
+  </div>
+</div>
+<div lang="en" data-l="en">
+  <h3>What is identical, what differs</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Component</th><th>In 2000</th><th>Here</th></tr></thead>
+    <tbody>
+      <tr><td>Bound</td><td>QPB (Anstreicher and Brixius), Frank-Wolfe from X₀ = ee<sup>T</sup>/n</td><td>Identical; checked: z₀ = PB (Lemma 2.1 of the paper)</td></tr>
+      <tr><td>Frank-Wolfe stopping</td><td>z<sub>k</sub> &gt; v, or f(X<sub>k</sub>) &lt; v and k ≥ NFW2, or k = NFW1</td><td>Identical</td></tr>
+      <tr><td>S and T matrices</td><td>Updated every 30 iterations (procedure in Section 6 of a paper we do not have)</td><td><b>No update</b>; our transportation-problem version raises the bound by only 0.3% on nug12</td></tr>
+      <tr><td>LAP</td><td>Jonker-Volgenant, gradient rounded to integers (OMS 2001), floating point later (2002)</td><td>Floating-point Jonker-Volgenant, <b>warm-started</b> with the column prices of the previous iteration (our addition)</td></tr>
+      <tr><td>Branching</td><td>Rules 1 to 4, strategies A to D by depth</td><td>Identical (rules 2, 3, 4; strategies A, B, C, D)</td></tr>
+      <tr><td>Symmetries</td><td>Sets J1 and pairs (J2, J3) hand-coded for each grid</td><td>Automorphism group of the distance matrix computed automatically, stabilizer recomputed at every node</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Where the time goes</h3>
+  <div class="keys">
+    <div class="key"><b>80% in the LAP</b>Profile on the nug30 root: 79% of the time in the LAP, 17% in matrix products.</div>
+    <div class="key ok"><b>2× with warm start</b>One Frank-Wolfe iteration at n = 30: 105 µs (Hungarian method), 50 µs (warm-started Jonker-Volgenant).</div>
+    <div class="key sun"><b>A stronger lead</b>A diagonal shift optimized at the root lifts the nug30 bound from 5,341 to 5,510 (published: 5,365), but enlarges the nug18 tree (497,265 nodes instead of 342,551). It would have to be recomputed at every node.</div>
+  </div>
+</div>
+</section>
+
+<!-- ============ QAP ============ -->
+<section id="qap" role="tabpanel" aria-labelledby="t-qap" hidden>
+  <h2><span data-l="fr">Le problème d'affectation quadratique</span><span data-l="en">The quadratic assignment problem</span></h2>
+  <p class="lead" lang="fr" data-l="fr">On place <b>n usines sur n emplacements</b>, une par emplacement. Entre deux usines circule un flux de marchandises, entre deux emplacements il y a une distance. On cherche le placement qui <b>minimise la somme des flux multipliés par les distances</b>.</p>
+  <p class="lead" lang="en" data-l="en">Place <b>n facilities on n locations</b>, one per location. Goods flow between each pair of facilities, and each pair of locations is some distance apart. Find the placement that <b>minimizes the sum of flows times distances</b>.</p>
+  <div class="two">
+    <div>
+      <div class="formula">min<sub>p</sub> &nbsp;Σ<sub>i,k</sub> a<sub>ik</sub> · b<sub>p(i) p(k)</sub><br><br>p : permutation {1, …, n}<br>A : <span data-l="fr">distances, B : flux (cas des NUG)</span><span data-l="en">distances, B: flows (NUG case)</span></div>
+      <div lang="fr" data-l="fr">
+        <p>En forme matricielle (Koopmans-Beckmann, 1957) : min tr(AXB + C)X<sup>T</sup> sur les matrices de permutation X. Le terme C représente des coûts fixes d'installation, nuls pour les NUG.</p>
+        <p>Le nombre de placements est n!. Pour n = 30, cela fait <b>2,65 × 10<sup>32</sup></b> placements, et aucune méthode connue n'évite d'en écarter la plupart par des bornes.</p>
+      </div>
+      <div lang="en" data-l="en">
+        <p>In matrix form (Koopmans-Beckmann, 1957): min tr(AXB + C)X<sup>T</sup> over permutation matrices X. C holds fixed installation costs, zero for the NUG instances.</p>
+        <p>There are n! placements. For n = 30 that is <b>2.65 × 10<sup>32</sup></b>, and no known method avoids discarding most of them with bounds.</p>
+      </div>
+    </div>
+    <div>
+      <p class="small" style="margin-top:0" lang="fr" data-l="fr">Les 30 emplacements de NUG30 forment une grille 5 × 6 ; la distance est la distance de Manhattan. Les cases colorées sont un domaine fondamental : grâce aux 4 symétries de la grille, le premier niveau de l'arbre n'a besoin que de ces emplacements.</p>
+      <p class="small" style="margin-top:0" lang="en" data-l="en">The 30 locations of NUG30 form a 5 × 6 grid with Manhattan distance. The colored cells are a fundamental domain: thanks to the 4 symmetries of the grid, the first level of the tree only needs these locations.</p>
+      <div class="grid30" id="g30"></div>
+    </div>
+  </div>
+<div lang="fr" data-l="fr">
+  <h3>Pourquoi c'est si dur</h3>
+  <div class="keys">
+    <div class="key"><b>NP-difficile</b>Le voyageur de commerce et le partitionnement de graphes s'écrivent comme des QAP.</div>
+    <div class="key sun"><b>Bornes faibles</b>La borne de Gilmore-Lawler (1962) donne 4 539 pour nug30, loin de l'optimum 6 124. L'écart à combler par l'énumération est énorme.</div>
+    <div class="key navy"><b>Arbres gigantesques</b>En 2000, prouver l'optimalité de nug30 a demandé près de 12 milliards de nœuds.</div>
+  </div>
+  <h3>Les bornes, de la moins chère à la plus forte</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Borne</th><th>Idée</th><th class="num">nug20</th><th class="num">nug30</th></tr></thead>
+    <tbody>
+      <tr><td>GLB (Gilmore 1962, Lawler 1963)</td><td>un LAP de LAP, très rapide</td><td class="num">2 057</td><td class="num">4 539</td></tr>
+      <tr><td>PB (Hadley, Rendl, Wolkowicz 1992)</td><td>valeurs propres projetées et un LAP</td><td class="num">2 196</td><td class="num">5 265</td></tr>
+      <tr><td>QPB (Anstreicher, Brixius 2001)</td><td>programme quadratique convexe, Frank-Wolfe</td><td class="num">2 290</td><td class="num">5 365</td></tr>
+      <tr><td>SDP (Burer, Vandenbussche 2004)</td><td>relaxation semi-définie, lift-and-project</td><td class="num">2 506</td><td class="num">5 934</td></tr>
+      <tr><td>Optimum</td><td></td><td class="num">2 570</td><td class="num">6 124</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small">Valeurs de la page « A comparison of lower bounds » de QAPLIB <span class="src">lu via résumé</span>, sauf PB que nous avons recalculée. Le compromis central de 2000 est là : la borne SDP est bien meilleure, mais elle coûte trop cher pour être calculée à chacun des milliards de nœuds.</p>
+</div>
+<div lang="en" data-l="en">
+  <h3>Why it is so hard</h3>
+  <div class="keys">
+    <div class="key"><b>NP-hard</b>The traveling salesman problem and graph partitioning can both be written as QAPs.</div>
+    <div class="key sun"><b>Weak bounds</b>The Gilmore-Lawler bound (1962) gives 4,539 for nug30, far from the optimum 6,124. Enumeration has a huge gap to close.</div>
+    <div class="key navy"><b>Gigantic trees</b>In 2000, proving nug30 optimal took almost 12 billion nodes.</div>
+  </div>
+  <h3>Bounds, from cheapest to strongest</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Bound</th><th>Idea</th><th class="num">nug20</th><th class="num">nug30</th></tr></thead>
+    <tbody>
+      <tr><td>GLB (Gilmore 1962, Lawler 1963)</td><td>an LAP of LAPs, very fast</td><td class="num">2,057</td><td class="num">4,539</td></tr>
+      <tr><td>PB (Hadley, Rendl, Wolkowicz 1992)</td><td>projected eigenvalues plus one LAP</td><td class="num">2,196</td><td class="num">5,265</td></tr>
+      <tr><td>QPB (Anstreicher, Brixius 2001)</td><td>convex quadratic program, Frank-Wolfe</td><td class="num">2,290</td><td class="num">5,365</td></tr>
+      <tr><td>SDP (Burer, Vandenbussche 2004)</td><td>semidefinite lift-and-project relaxation</td><td class="num">2,506</td><td class="num">5,934</td></tr>
+      <tr><td>Optimum</td><td></td><td class="num">2,570</td><td class="num">6,124</td></tr>
+    </tbody>
+  </table></div>
+  <p class="small">Values from the QAPLIB page "A comparison of lower bounds" <span class="src">read via summary</span>, except PB, which we recomputed. Here is the central trade-off of 2000: the SDP bound is much better, but too expensive to compute at each of billions of nodes.</p>
+</div>
+</section>
+
+<!-- ============ 2000 ============ -->
+<section id="p2000" role="tabpanel" aria-labelledby="t-2000" hidden>
+<div lang="fr" data-l="fr">
+  <h2>NUG30 en juin 2000</h2>
+  <p class="lead">Posé en 1968 par Nugent, Vollmann et Ruml, NUG30 a résisté 32 ans. Il est tombé le <b>15 juin 2000</b>, après <b>6 jours et 22 heures</b> de calcul sur une grille de machines réparties dans huit institutions.</p>
+  <div class="keys">
+    <div class="key"><b>11 892 208 412 nœuds</b>soit 1,19 × 10<sup>10</sup>, environ 1 million de LAP par seconde sur toute la grille.</div>
+    <div class="key sun"><b>653 machines en moyenne</b>1 009 au maximum, 2 510 processeurs au total sur la durée du calcul.</div>
+    <div class="key navy"><b>6,94 années de C3000</b>Temps ramené à une station HP 9000 C3000 ; efficacité parallèle 92 %.</div>
+  </div>
+  <h3>La table 7 de l'article</h3>
+</div>
+<div lang="en" data-l="en">
+  <h2>NUG30 in June 2000</h2>
+  <p class="lead">Posed in 1968 by Nugent, Vollmann and Ruml, NUG30 resisted for 32 years. It fell on <b>June 15, 2000</b>, after <b>6 days and 22 hours</b> of computing on a grid of machines spread over eight institutions.</p>
+  <div class="keys">
+    <div class="key"><b>11,892,208,412 nodes</b>that is 1.19 × 10<sup>10</sup>, about 1 million LAPs per second across the grid.</div>
+    <div class="key sun"><b>653 machines on average</b>1,009 at peak, 2,510 processors in total over the run.</div>
+    <div class="key navy"><b>6.94 C3000-years</b>Time normalized to an HP 9000 C3000 workstation; parallel efficiency 92%.</div>
+  </div>
+  <h3>Table 7 of the article</h3>
+</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Instance</th><th class="num"><span data-l="fr">Nœuds</span><span data-l="en">Nodes</span></th><th class="num"><span data-l="fr">Jours</span><span data-l="en">Days</span></th><th class="num"><span data-l="fr">Années C3000</span><span data-l="en">C3000-years</span></th><th class="num"><span data-l="fr">Machines (moy.)</span><span data-l="en">Machines (avg)</span></th><th class="num"><span data-l="fr">Efficacité</span><span data-l="en">Efficiency</span></th></tr></thead>
+    <tbody>
+      <tr><td>nug27</td><td class="num">4.02 × 10⁸</td><td class="num">0.69</td><td class="num">0.18</td><td class="num">185</td><td class="num">0.91</td></tr>
+      <tr><td>nug28</td><td class="num">2.23 × 10⁹</td><td class="num">3.73</td><td class="num">0.88</td><td class="num">224</td><td class="num">0.90</td></tr>
+      <tr><td><b>nug30</b></td><td class="num">1.19 × 10¹⁰</td><td class="num">6.92</td><td class="num">6.94</td><td class="num">653</td><td class="num">0.92</td></tr>
+      <tr><td>kra30b</td><td class="num">5.14 × 10⁹</td><td class="num">3.79</td><td class="num">2.67</td><td class="num">462</td><td class="num">0.92</td></tr>
+      <tr><td>kra32</td><td class="num">1.67 × 10¹⁰</td><td class="num">12.26</td><td class="num">10.35</td><td class="num">576</td><td class="num">0.87</td></tr>
+      <tr><td>tho30</td><td class="num">3.43 × 10¹⁰</td><td class="num">17.18</td><td class="num">17.48</td><td class="num">661</td><td class="num">0.89</td></tr>
+    </tbody>
+  </table></div>
+<div lang="fr" data-l="fr">
+  <h3>Les quatre ingrédients</h3>
+  <div class="keys">
+    <div class="key"><b>1. Une borne au bon prix</b>QPB : un programme quadratique convexe résolu approximativement par Frank-Wolfe. Chaque itération coûte un produit de matrices et un LAP, et fournit une borne valide plus une matrice duale U.</div>
+    <div class="key sun"><b>2. Le dual pour brancher</b>Si z + u<sub>ij</sub> dépasse la meilleure valeur connue, l'affectation i → j est éliminée sans calcul. Les règles 2 à 4 choisissent la ligne ou la colonne qui laisse le moins d'enfants, ou qui fait monter le plus les bornes sur deux niveaux.</div>
+    <div class="key navy"><b>3. Les symétries</b>La grille 5 × 6 a 4 symétries (identité, deux réflexions, demi-tour). Le premier niveau ne garde qu'un quart des emplacements, et la logique se répète plus bas tant que les emplacements fixés restent invariants.</div>
+    <div class="key ok"><b>4. La grille de calcul</b>MW (master-worker) sur Condor, avec Globus pour les supercalculateurs. Un maître garde le pool de nœuds ouverts, chaque worker explore en profondeur pendant 100 s puis rend les nœuds non finis.</div>
+  </div>
+  <h3>La « finish-up strategy »</h3>
+  <p>Arrêter un worker au bout de son temps lui faisait rendre une foule de petits nœuds, mal amortis. La solution : après le temps imparti, le worker <b>continue un moment sur les nœuds profonds et faciles</b> (profondeur au-delà de 5 et écart relatif sous 0,28, puis profondeur 6 et écart 1,0), et ne rend que des morceaux hauts dans l'arbre. Sur nug25, l'efficacité parallèle est passée de 41,8 % à 85,6 % avec ces réglages. Quand le pool se vide, le temps de tâche tombe à 10 s et les nœuds sont triés par écart, en « meilleur d'abord paresseux ».</p>
+  <h3>Prévoir avant de lancer : l'estimateur de Knuth</h3>
+  <p>Avant de mobiliser la grille, l'équipe estimait la taille de l'arbre par des plongées aléatoires (Knuth, 1975) : le produit des facteurs de branchement le long d'une plongée est un estimateur sans biais. Avec un tirage pondéré par l'écart relatif (puissance q entre 1 et 2) et 10 000 plongées, l'erreur sur le temps de nug25 était de l'ordre de 1 %. Nous utilisons la même méthode pour dire combien coûterait NUG30 aujourd'hui.</p>
+  <div class="note"><b>Sources.</b> Prépublication de l'article (Optimization Online, octobre 2000) <span class="src">lu via extraction automatique</span> ; papier de Brixius et Anstreicher, <i>Optimization Methods and Software</i> 16 (2001) <span class="src full">lu en entier</span> ; récit de Jean-Pierre Goux sur l'équipe et la finish-up strategy (témoignage, 24 octobre 2026).</div>
+</div>
+<div lang="en" data-l="en">
+  <h3>The four ingredients</h3>
+  <div class="keys">
+    <div class="key"><b>1. A bound at the right price</b>QPB: a convex quadratic program solved approximately by Frank-Wolfe. Each iteration costs one matrix product and one LAP, and yields a valid bound plus a dual matrix U.</div>
+    <div class="key sun"><b>2. Duals for branching</b>If z + u<sub>ij</sub> exceeds the incumbent, assignment i → j is eliminated at no cost. Rules 2 to 4 pick the row or column that leaves the fewest children, or that raises the bounds most over two levels.</div>
+    <div class="key navy"><b>3. Symmetry</b>The 5 × 6 grid has 4 symmetries (identity, two reflections, half-turn). The first level keeps only a quarter of the locations, and the logic repeats deeper while the fixed locations stay invariant.</div>
+    <div class="key ok"><b>4. The computational grid</b>MW (master-worker) on Condor, with Globus for supercomputers. A master holds the pool of open nodes; each worker searches depth-first for 100 s, then returns unfinished nodes.</div>
+  </div>
+  <h3>The finish-up strategy</h3>
+  <p>Stopping a worker when its time was up made it return a crowd of small nodes, poorly amortized. The fix: after its time slice, the worker <b>keeps going for a while on deep, easy nodes</b> (depth beyond 5 and relative gap under 0.28, then depth 6 and gap 1.0), and only returns pieces high in the tree. On nug25, parallel efficiency rose from 41.8% to 85.6% with these settings. When the pool runs low, the task time drops to 10 s and nodes are sorted by gap, a "lazy best-first" order.</p>
+  <h3>Predicting before launching: Knuth's estimator</h3>
+  <p>Before mobilizing the grid, the team estimated tree size with random dives (Knuth, 1975): the product of branching factors along a dive is an unbiased estimator. With sampling weighted by relative gap (power q between 1 and 2) and 10,000 dives, the error on nug25 time was around 1%. We use the same method to say what NUG30 would cost today.</p>
+  <div class="note"><b>Sources.</b> Preprint of the article (Optimization Online, October 2000) <span class="src">read via automatic extraction</span>; Brixius and Anstreicher, <i>Optimization Methods and Software</i> 16 (2001) <span class="src full">read in full</span>; Jean-Pierre Goux's account of the team and of the finish-up strategy (testimony, October 24, 2026).</div>
+</div>
+</section>
+
+<!-- ============ SINCE ============ -->
+<section id="since" role="tabpanel" aria-labelledby="t-since" hidden>
+<div lang="fr" data-l="fr">
+  <h2>Depuis 2002</h2>
+  <p class="lead">NUG30 n'est plus la frontière. Il se résout aujourd'hui <b>en moins d'une heure sur un supercalculateur</b>, ou <b>en une journée sur une station avec un GPU</b>. La frontière exacte est autour de <b>n = 40</b>, et la plus grande instance ouverte qui retient l'attention est <b>tai256c</b>.</p>
+  <div class="timeline">
+    <div class="ev"><div class="yr">2003-2004</div>Hahn résout tai25a (393,5 jours sur un processeur à 420 MHz) puis toutes les instances bur26, avec des bornes de type RLT de niveau 1 <span class="src">QAPLIB, résumé</span>.</div>
+    <div class="ev"><div class="yr">2004-2007</div>Bornes par programmation semi-définie : Burer et Vandenbussche (lift-and-project), Mittelmann et Peng (SDRMS, 2007), de Klerk et Sotirov (symétries, esc64). Bornes bien meilleures, trop chères pour un branch-and-bound de l'époque <span class="src">QAPLIB, résumé</span>.</div>
+    <div class="ev"><div class="yr">2007</div>Adams, Guignard, Hahn et Hightower : borne RLT de niveau 2 par ascension duale. NUG30 avec 543 061 nœuds, mais 19,7 millions de secondes de calcul <span class="src">via la table de Gonçalves et al.</span>.</div>
+    <div class="ev"><div class="yr">2011-2012</div>Fischetti, Monaci et Salvagnin (<i>Operations Research</i> 60, 2012) : branch-and-cut en programmation linéaire en nombres entiers, symétries et découpage. esc32h et esc128 résolus pour la première fois, tai64c en 5 heures sur un PC à 4 cœurs. Roth et Hahn résolvent tai30b avec RLT 1/2/3 en parallèle <span class="src">résumés</span>.</div>
+    <div class="ev"><div class="yr">2013</div>Hahn et al. : RLT de niveau 3 en parallèle. NUG30 en 3 383 nœuds et 733 812 s, avec 722,8 Go de mémoire <span class="src">via Gonçalves et al.</span>.</div>
+    <div class="ev"><div class="yr">2015-2017</div>Gonçalves, Pessoa, Drummond, Bentes et Farias : RLT2 sur GPU. <b>NUG30 en 103 380 nœuds et environ 88 867 s (24,7 h) sur une station à 6 cœurs avec une carte GTX Titan</b>. tai35b et tai40b résolus pour la première fois (arXiv:1510.02065) <span class="src">lu via résumé</span>.</div>
+    <div class="ev"><div class="yr">2021</div>Fujii, Ito, Kim, Kojima, Shinano et Toh : relaxation doublement non négative (DNN) résolue par la méthode « Newton-bracketing », branch-and-bound massivement parallèle (Ubiquity Generator, ZIB). <b>NUG30 en 26 181 nœuds et 3 140 s sur 1 728 cœurs</b>. tai30a et sko42 résolus pour la première fois (arXiv:2101.09629) <span class="src">lu via résumé</span>.</div>
+    <div class="ev"><div class="yr">2022-2024</div>tai256c : reformulée en problème quadratique binaire de dimension 256 à une contrainte de cardinalité, avec bornes améliorées par les symétries (arXiv:2210.15963 et 2401.09439) <span class="src">titres et résumés</span>.</div>
+  </div>
+  <h3>Ce que cela dit pour NUG30</h3>
+</div>
+<div lang="en" data-l="en">
+  <h2>Since 2002</h2>
+  <p class="lead">NUG30 is no longer the frontier. Today it is solved <b>in under an hour on a supercomputer</b>, or <b>in about a day on a workstation with a GPU</b>. The exact frontier is around <b>n = 40</b>, and the largest open instance drawing attention is <b>tai256c</b>.</p>
+  <div class="timeline">
+    <div class="ev"><div class="yr">2003-2004</div>Hahn solves tai25a (393.5 days on a 420 MHz processor), then all bur26 instances, with level-1 RLT bounds <span class="src">QAPLIB, summary</span>.</div>
+    <div class="ev"><div class="yr">2004-2007</div>Semidefinite programming bounds: Burer and Vandenbussche (lift-and-project), Mittelmann and Peng (SDRMS, 2007), de Klerk and Sotirov (symmetry, esc64). Much better bounds, too expensive for a branch-and-bound of the time <span class="src">QAPLIB, summary</span>.</div>
+    <div class="ev"><div class="yr">2007</div>Adams, Guignard, Hahn and Hightower: level-2 RLT bound by dual ascent. NUG30 in 543,061 nodes, but 19.7 million seconds of computing <span class="src">via Gonçalves et al.'s table</span>.</div>
+    <div class="ev"><div class="yr">2011-2012</div>Fischetti, Monaci and Salvagnin (<i>Operations Research</i> 60, 2012): MILP branch-and-cut with symmetry and decomposition. esc32h and esc128 solved for the first time, tai64c in 5 hours on a quad-core PC. Roth and Hahn solve tai30b with parallel RLT 1/2/3 <span class="src">summaries</span>.</div>
+    <div class="ev"><div class="yr">2013</div>Hahn et al.: parallel level-3 RLT. NUG30 in 3,383 nodes and 733,812 s, using 722.8 GB of memory <span class="src">via Gonçalves et al.</span>.</div>
+    <div class="ev"><div class="yr">2015-2017</div>Gonçalves, Pessoa, Drummond, Bentes and Farias: RLT2 on GPU. <b>NUG30 in 103,380 nodes and about 88,867 s (24.7 h) on a 6-core workstation with a GTX Titan card</b>. tai35b and tai40b solved for the first time (arXiv:1510.02065) <span class="src">read via summary</span>.</div>
+    <div class="ev"><div class="yr">2021</div>Fujii, Ito, Kim, Kojima, Shinano and Toh: doubly nonnegative (DNN) relaxation solved by the Newton-bracketing method, massively parallel branch-and-bound (Ubiquity Generator, ZIB). <b>NUG30 in 26,181 nodes and 3,140 s on 1,728 cores</b>. tai30a and sko42 solved for the first time (arXiv:2101.09629) <span class="src">read via summary</span>.</div>
+    <div class="ev"><div class="yr">2022-2024</div>tai256c: recast as a 256-dimensional binary quadratic problem with one cardinality constraint, with bounds improved through symmetry (arXiv:2210.15963 and 2401.09439) <span class="src">titles and abstracts</span>.</div>
+  </div>
+  <h3>What this says about NUG30</h3>
+</div>
+  <div class="tbl"><table>
+    <thead><tr><th><span data-l="fr">Méthode</span><span data-l="en">Method</span></th><th class="num"><span data-l="fr">Nœuds</span><span data-l="en">Nodes</span></th><th><span data-l="fr">Temps</span><span data-l="en">Time</span></th><th><span data-l="fr">Calcul</span><span data-l="en">Hardware</span></th></tr></thead>
+    <tbody>
+      <tr><td><span data-l="fr">QPB + grille (2000)</span><span data-l="en">QPB + grid (2000)</span></td><td class="num">1.19 × 10¹⁰</td><td><span data-l="fr">6,9 jours</span><span data-l="en">6.9 days</span></td><td><span data-l="fr">653 machines, 6,94 années de C3000</span><span data-l="en">653 machines, 6.94 C3000-years</span></td></tr>
+      <tr><td>RLT2 (2007)</td><td class="num">543,061</td><td><span data-l="fr">228 jours</span><span data-l="en">228 days</span></td><td><span data-l="fr">1 processeur</span><span data-l="en">1 processor</span></td></tr>
+      <tr><td><span data-l="fr">RLT 1/2/3 parallèle (2013)</span><span data-l="en">Parallel RLT 1/2/3 (2013)</span></td><td class="num">3,383</td><td><span data-l="fr">8,5 jours</span><span data-l="en">8.5 days</span></td><td><span data-l="fr">grappe, 722,8 Go</span><span data-l="en">cluster, 722.8 GB</span></td></tr>
+      <tr><td><span data-l="fr">RLT2 sur GPU (2015-2017)</span><span data-l="en">RLT2 on GPU (2015-2017)</span></td><td class="num">103,380</td><td>≈ 24.7 h</td><td><span data-l="fr">1 station + 1 GPU</span><span data-l="en">1 workstation + 1 GPU</span></td></tr>
+      <tr><td><span data-l="fr">DNN + Newton-bracketing (2021)</span><span data-l="en">DNN + Newton-bracketing (2021)</span></td><td class="num">26,181</td><td>52 min</td><td><span data-l="fr">1 728 cœurs (≈ 63 jours-cœur)</span><span data-l="en">1,728 cores (≈ 63 core-days)</span></td></tr>
+    </tbody>
+  </table></div>
+<div lang="fr" data-l="fr">
+  <p>La tendance est nette : <b>des bornes beaucoup plus fortes et beaucoup plus chères</b>, donc des arbres mille à un million de fois plus petits. Le compromis de 2000 (borne bon marché, arbre immense) reste pertinent sur un CPU seul, et c'est ce que nous mesurons.</p>
+  <h3>Instances encore ouvertes</h3>
+  <p>D'après la page QAPLIB actuelle (Polytechnique Montréal, mise à jour en mai 2018), restent sans optimalité prouvée, entre autres : tai35a, tai40a, tai50a, tai60a, tai80a, tai100a, tai50b et au-delà, sko49 à sko100f, tho40, tho150, wil50, wil100, tai150b, tai256c. tai30a, sko42, tai35b et tai40b y figurent encore comme ouvertes alors que les travaux ci-dessus les ont résolues : la page n'est plus tenue à jour <span class="src">lu via résumé</span>.</p>
+</div>
+<div lang="en" data-l="en">
+  <p>The trend is clear: <b>much stronger and much more expensive bounds</b>, hence trees a thousand to a million times smaller. The 2000 trade-off (cheap bound, huge tree) remains relevant on a single CPU, and that is what we measure.</p>
+  <h3>Instances still open</h3>
+  <p>According to the current QAPLIB page (Polytechnique Montréal, last updated May 2018), the following, among others, have no proven optimum: tai35a, tai40a, tai50a, tai60a, tai80a, tai100a, tai50b and larger, sko49 to sko100f, tho40, tho150, wil50, wil100, tai150b, tai256c. tai30a, sko42, tai35b and tai40b are still listed as open although the work above solved them: the page is no longer maintained <span class="src">read via summary</span>.</p>
+</div>
+</section>
+
+<!-- ============ QAPLIB ============ -->
+<section id="lib" role="tabpanel" aria-labelledby="t-lib" hidden>
+<div lang="fr" data-l="fr">
+  <h2>QAPLIB et la série NUG</h2>
+  <p class="lead">QAPLIB est la bibliothèque de référence des instances du QAP, créée par <b>Burkard, Karisch et Rendl</b> (première version en 1991, article dans le <i>Journal of Global Optimization</i> en 1997), aujourd'hui hébergée par Peter Hahn et Miguel Anjos.</p>
+  <p>Les instances NUG viennent de Nugent, Vollmann et Ruml (<i>Operations Research</i>, 1968) : une grille d'emplacements, la distance de Manhattan, et des flux entiers. QAPLIB a complété la série (nug21 à nug25 en 1996), et l'équipe de 2000 a construit nug27 et nug28 pour préparer NUG30 <span class="src">QAPLIB, résumé</span>.</p>
+</div>
+<div lang="en" data-l="en">
+  <h2>QAPLIB and the NUG series</h2>
+  <p class="lead">QAPLIB is the reference library of QAP instances, created by <b>Burkard, Karisch and Rendl</b> (first version 1991, article in the <i>Journal of Global Optimization</i> in 1997), now hosted by Peter Hahn and Miguel Anjos.</p>
+  <p>The NUG instances come from Nugent, Vollmann and Ruml (<i>Operations Research</i>, 1968): a grid of locations, Manhattan distance and integer flows. QAPLIB extended the series (nug21 to nug25 in 1996), and the 2000 team built nug27 and nug28 to prepare for NUG30 <span class="src">QAPLIB, summary</span>.</p>
+</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Instance</th><th class="num">n</th><th><span data-l="fr">Grille</span><span data-l="en">Grid</span></th><th class="num"><span data-l="fr">Symétries</span><span data-l="en">Symmetries</span></th><th class="num">Optimum</th><th><span data-l="fr">Optimalité prouvée</span><span data-l="en">Optimality proved</span></th></tr></thead>
+    <tbody id="nugtable"></tbody>
+  </table></div>
+  <p class="small" lang="fr" data-l="fr">Symétries : taille du groupe d'automorphismes de la matrice des distances, calculée par notre code au démarrage de chaque calcul (moins d'une seconde) et exploitée dès le premier nœud. Pour nug27 et nug28, la grille est dans la seconde matrice du fichier : le code cherche les deux. Une grille incomplète (dernière rangée inachevée) n'en a aucune. Fichiers récupérés depuis la copie de QAPLIB du paquet R <code>qap</code> (dépôt GitHub mhahsler/qap) ; les optimums concordent avec la page QAPLIB.</p>
+  <p class="small" lang="en" data-l="en">Symmetries: size of the automorphism group of the distance matrix, computed by our code at the start of every run (under a second) and used from the first node. For nug27 and nug28 the grid is in the second matrix of the file: the code checks both. An incomplete grid (unfinished last row) has none. Files taken from the QAPLIB copy in the R package <code>qap</code> (GitHub repository mhahsler/qap); optima agree with the QAPLIB page.</p>
+  <h3><span data-l="fr">Les autres familles</span><span data-l="en">Other families</span></h3>
+  <div class="tbl"><table>
+    <thead><tr><th><span data-l="fr">Famille</span><span data-l="en">Family</span></th><th><span data-l="fr">Origine (d'après QAPLIB)</span><span data-l="en">Origin (per QAPLIB)</span></th><th><span data-l="fr">Caractère</span><span data-l="en">Character</span></th></tr></thead>
+    <tbody>
+      <tr><td>tai…a / tai…b</td><td>Taillard (1991, 1995)</td><td><span data-l="fr">aléatoires uniformes (a), réalistes asymétriques (b) ; les « a » sont parmi les plus durs</span><span data-l="en">uniform random (a), realistic asymmetric (b); the "a" ones are among the hardest</span></td></tr>
+      <tr><td>sko</td><td>Skorin-Kapov (1990)</td><td><span data-l="fr">grilles comme NUG, plus grandes (42 à 100)</span><span data-l="en">grids like NUG, larger (42 to 100)</span></td></tr>
+      <tr><td>kra</td><td>Krarup, Pruzan</td><td><span data-l="fr">conception d'un hôpital ; kra30a, kra30b, kra32</span><span data-l="en">hospital layout; kra30a, kra30b, kra32</span></td></tr>
+      <tr><td>tho, wil</td><td>Thonemann, Bölte ; Wilhelm, Ward</td><td><span data-l="fr">grilles, jusqu'à 150 et 100</span><span data-l="en">grids, up to 150 and 100</span></td></tr>
+      <tr><td>esc</td><td>Eschermann, Wunderlich</td><td><span data-l="fr">tests de circuits, très symétriques, tous résolus en 2011</span><span data-l="en">circuit testing, highly symmetric, all solved by 2011</span></td></tr>
+      <tr><td>ste</td><td>Steinberg (1961)</td><td><span data-l="fr">câblage d'un calculateur, ste36a/b/c</span><span data-l="en">backboard wiring, ste36a/b/c</span></td></tr>
+      <tr><td>had, rou, scr, chr, els, bur, lipa</td><td>Hadley et al., Roucairol, Scriabin-Vergin, Christofides-Benavent, Elshafei, Burkard-Offermann, Li-Pardalos</td><td><span data-l="fr">tailles moyennes, presque toutes résolues</span><span data-l="en">medium sizes, almost all solved</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="small"><span data-l="fr">Attributions reprises de la liste QAPLIB, sans lecture des articles d'origine.</span><span data-l="en">Attributions taken from the QAPLIB list, without reading the original articles.</span></p>
+</section>
+
+<!-- ============ IDEAS ============ -->
+<section id="ideas" role="tabpanel" aria-labelledby="t-ideas" hidden>
+<div lang="fr" data-l="fr">
+  <h2>Pistes pour aller plus loin</h2>
+  <p class="lead">Trois niveaux : <b>accélérer le même algorithme</b>, <b>changer le compromis borne / arbre</b>, et <b>réutiliser les idées de 2000 pour nos agents</b>.</p>
+  <h3>Accélérer le même algorithme</h3>
+  <div class="keys">
+    <div class="key ok"><b>Fait : LAP démarré à chaud</b>Les prix des colonnes de l'itération précédente servent de départ. Le LAP devient deux fois plus rapide.</div>
+    <div class="key"><b>LAP en entiers et vectorisé</b>Comme Nate en 2001, arrondir le gradient en entiers ; résoudre plusieurs LAP de nœuds différents en même temps (AVX-512, ou GPU).</div>
+    <div class="key"><b>Moins de valeurs propres</b>Les décompositions spectrales ne dépendent que des ensembles d'usines et d'emplacements libres. Les réutiliser entre frères et au fil des plongées.</div>
+    <div class="key"><b>Repartir du parent</b>Initialiser Frank-Wolfe chez l'enfant avec la solution du parent restreinte, plutôt qu'avec ee<sup>T</sup>/n. Le papier dit avoir essayé sans gain fiable ; à remesurer.</div>
+  </div>
+  <h3>Changer le compromis</h3>
+  <div class="keys">
+    <div class="key sun"><b>Décalages diagonaux par nœud</b>À la racine, ils font passer la borne de nug30 de 5 341 à 5 510. Le gain disparaît plus bas parce que les décalages ne sont plus adaptés : il faut les réoptimiser par nœud, à un coût à mesurer.</div>
+    <div class="key sun"><b>Borne hybride</b>Une borne forte et chère (DNN, RLT2, SDP) aux premiers niveaux, où chaque nœud élagué supprime des millions de descendants, et QPB plus bas.</div>
+    <div class="key sun"><b>Réglage automatique de la stratégie</b>L'estimateur de Knuth prédit la taille de l'arbre en quelques minutes. On peut s'en servir pour choisir les seuils de profondeur, NFW et NBEST instance par instance.</div>
+  </div>
+  <h3>Le branch-and-bound coordonné</h3>
+  <p>Comme en 2000, un <b>maître</b> garde le pool des nœuds ouverts et des <b>workers</b> explorent chacun un sous-arbre en profondeur. Toute amélioration de la meilleure solution est <b>diffusée aussitôt</b> à tous (ici par mémoire partagée), et un worker en fin de tranche ne rend que ses nœuds les plus hauts, dans l'esprit de la finish-up strategy. Le code est écrit (mode <code>par</code>, 4 fils) et validé sur nug15 ; son journal d'événements alimentera la page « En direct ».</p>
+  <h3>Les idées de 2000 appliquées aux agents</h3>
+  <div class="keys">
+    <div class="key navy"><b>Finish-up pour les agents</b>Budget fixe, puis clôture de la branche en cours et rendu de 3 ou 4 pistes reprenables, plutôt qu'un arrêt brutal qui laisse des miettes.</div>
+    <div class="key navy"><b>Un estimateur avant la campagne</b>Comme Knuth pour l'arbre, une plongée rapide pour estimer le coût d'une campagne d'agents avant de la lancer.</div>
+    <div class="key navy"><b>Des agents qui cherchent des règles</b>Ici le juge est un programme : une règle de branchement proposée par un agent se note par la taille d'arbre estimée.</div>
+  </div>
+  <div class="warnbox"><b>Casser un record ?</b> NUG30 est résolu. Un record utile serait soit le <b>temps sur une seule machine sans GPU</b> (environ une journée avec GPU en 2015-2017), soit une <b>instance encore ouverte</b>. Les candidates de taille 35 à 40 (tai35a, tai40a) ont résisté à des moyens bien supérieurs aux nôtres : il faut d'abord mesurer, avec l'estimateur, ce qu'elles coûteraient.</div>
+</div>
+<div lang="en" data-l="en">
+  <h2>Ways to go further</h2>
+  <p class="lead">Three levels: <b>speed up the same algorithm</b>, <b>change the bound / tree trade-off</b>, and <b>reuse the ideas of 2000 for our agents</b>.</p>
+  <h3>Speed up the same algorithm</h3>
+  <div class="keys">
+    <div class="key ok"><b>Done: warm-started LAP</b>The column prices of the previous iteration serve as the starting point. The LAP becomes twice as fast.</div>
+    <div class="key"><b>Integer and vectorized LAP</b>As Nate did in 2001, round the gradient to integers; solve several LAPs from different nodes at once (AVX-512 or GPU).</div>
+    <div class="key"><b>Fewer eigen-decompositions</b>Spectral decompositions depend only on the sets of free facilities and locations. Reuse them across siblings and along dives.</div>
+    <div class="key"><b>Start from the parent</b>Initialize Frank-Wolfe in the child from the parent's restricted solution instead of ee<sup>T</sup>/n. The paper reports no reliable gain; worth re-measuring.</div>
+  </div>
+  <h3>Change the trade-off</h3>
+  <div class="keys">
+    <div class="key sun"><b>Diagonal shifts per node</b>At the root they lift the nug30 bound from 5,341 to 5,510. The gain fades deeper because the shifts no longer fit; they must be re-optimized per node, at a cost to be measured.</div>
+    <div class="key sun"><b>Hybrid bound</b>A strong, expensive bound (DNN, RLT2, SDP) at the top levels, where each pruned node removes millions of descendants, and QPB below.</div>
+    <div class="key sun"><b>Automatic strategy tuning</b>Knuth's estimator predicts tree size in minutes. It can pick depth cut-offs, NFW and NBEST per instance.</div>
+  </div>
+  <h3>Coordinated branch-and-bound</h3>
+  <p>As in 2000, a <b>master</b> holds the pool of open nodes and <b>workers</b> each explore a subtree depth-first. Any improvement of the incumbent is <b>broadcast at once</b> to all (here through shared memory), and a worker at the end of its slice returns only its highest nodes, in the spirit of the finish-up strategy. The code is written (<code>par</code> mode, 4 threads) and validated on nug15; its event log will feed the Live page.</p>
+  <h3>Ideas from 2000 applied to agents</h3>
+  <div class="keys">
+    <div class="key navy"><b>Finish-up for agents</b>A fixed budget, then closing the current branch and handing back 3 or 4 resumable leads, instead of an abrupt stop that leaves crumbs.</div>
+    <div class="key navy"><b>An estimator before the campaign</b>As Knuth did for trees, a quick dive to estimate the cost of an agent campaign before launching it.</div>
+    <div class="key navy"><b>Agents that search for rules</b>Here the judge is a program: a branching rule proposed by an agent is scored by its estimated tree size.</div>
+  </div>
+  <div class="warnbox"><b>Breaking a record?</b> NUG30 is solved. A useful record would be either the <b>time on a single machine without a GPU</b> (about a day with a GPU in 2015-2017), or an <b>instance still open</b>. The size 35 to 40 candidates (tai35a, tai40a) have resisted far larger means than ours; we must first measure, with the estimator, what they would cost.</div>
+</div>
+</section>
+
+</div></main>
+
+<script>
+(function(){
+  "use strict";
+  let LANG='fr';
+  try{ LANG = localStorage.getItem('nug30lang') || ((navigator.language||'fr').toLowerCase().startsWith('fr')?'fr':'en'); }catch(e){}
+  const T=(fr,en)=>LANG==='en'?en:fr;
+  const LOC=()=>LANG==='en'?'en-US':'fr-FR';
+  function setLang(l){
+    LANG=l; document.documentElement.setAttribute('data-lang',l); document.documentElement.lang=l;
+    document.getElementById('lang-fr').setAttribute('aria-pressed',l==='fr'); document.getElementById('lang-en').setAttribute('aria-pressed',l==='en');
+    try{localStorage.setItem('nug30lang',l)}catch(e){}
+    buildNug(); if(state) render(); else { renderEmpty(); drawChart(staticOurs()); }
+  }
+  document.getElementById('lang-fr').addEventListener('click',()=>setLang('fr'));
+  document.getElementById('lang-en').addEventListener('click',()=>setLang('en'));
+
+  // ---------- tabs ----------
+  const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+  function show(id){
+    tabs.forEach(t=>{const on=t.getAttribute('aria-controls')===id; t.setAttribute('aria-selected',on?'true':'false'); document.getElementById(t.getAttribute('aria-controls')).hidden=!on;});
+    try{localStorage.setItem('nug30tab',id)}catch(e){}
+  }
+  tabs.forEach(t=>t.addEventListener('click',()=>{show(t.getAttribute('aria-controls')); try{history.replaceState(null,'','#'+t.getAttribute('aria-controls'))}catch(e){}}));
+  let start=(location.hash||'').slice(1);
+  if(!tabs.some(t=>t.getAttribute('aria-controls')===start)){try{start=localStorage.getItem('nug30tab')||'live'}catch(e){start='live'}}
+  if(!tabs.some(t=>t.getAttribute('aria-controls')===start)) start='live';
+  show(start);
+
+  // ---------- reference data ----------
+  const NUG = [
+    ["nug12",12,["3 × 4","3 × 4"],4,578,["avant 1996","before 1996"]],["nug14",14,["3 × 5 incomplète","3 × 5 incomplete"],1,1014,["avant 1996","before 1996"]],["nug15",15,["3 × 5","3 × 5"],4,1150,["avant 1996","before 1996"]],
+    ["nug16a",16,["4 × 4 (variante a)","4 × 4 (variant a)"],1,1610,["avant 1996","before 1996"]],["nug16b",16,["4 × 4 (variante b)","4 × 4 (variant b)"],8,1240,["avant 1996","before 1996"]],["nug17",17,["incomplète","incomplete"],1,1732,["avant 1996","before 1996"]],
+    ["nug18",18,["3 × 6 incomplète","3 × 6 incomplete"],1,1930,["avant 1996","before 1996"]],["nug20",20,["4 × 5","4 × 5"],4,2570,["avant 1996","before 1996"]],["nug21",21,["3 × 7","3 × 7"],4,2438,["1996","1996"]],["nug22",22,["2 × 11","2 × 11"],4,3596,["1996","1996"]],
+    ["nug24",24,["4 × 6","4 × 6"],4,3488,["décembre 1996","December 1996"]],["nug25",25,["5 × 5","5 × 5"],8,3744,["mars 1998","March 1998"]],["nug27",27,["3 × 9","3 × 9"],4,5234,["février 2000 (Anstreicher, Brixius, Goux, Linderoth)","February 2000 (Anstreicher, Brixius, Goux, Linderoth)"]],
+    ["nug28",28,["4 × 7","4 × 7"],4,5166,["avril 2000 (idem)","April 2000 (same team)"]],["nug30",30,["5 × 6","5 × 6"],4,6124,["juin 2000 (idem)","June 2000 (same team)"]]];
+  const PAPER = {nug16b:[6867,0.9],nug18:[251470,69.2],nug20:[1040308,145.8],nug21:[1698093,212.3],nug22:[1225892,134.3],nug24:[31865440,5829.9],
+    nug25:[7.1e7,1.1e6/60],nug27:[4.02e8,0.18*525960],nug28:[2.23e9,0.88*525960],nug30:[1.19e10,6.94*525960]};
+  const OURS_STATIC = {nug18:158/60};
+  const staticOurs=()=>({...OURS_STATIC});
+  const OPT = Object.fromEntries(NUG.map(r=>[r[0],r[4]]));
+
+  function fmtInt(x){return x==null?'':Math.round(x).toLocaleString(LOC())}
+  function fmtNum(x,d){return x.toLocaleString(LOC(),{maximumFractionDigits:d,minimumFractionDigits:d})}
+  function fmtDur(s){if(s==null||!isFinite(s))return ''; if(s<60)return fmtNum(s,1)+' s'; if(s<3600)return fmtNum(s/60,1)+' min'; if(s<86400)return fmtNum(s/3600,1)+' h'; return fmtNum(s/86400,1)+T(' j',' d');}
+  function fmtBig(x){return x>1e7?x.toExponential(2).replace('.',LANG==='en'?'.':','):fmtInt(x)}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+  function buildNug(){
+    const tb=document.getElementById('nugtable'); tb.innerHTML='';
+    NUG.forEach(r=>{const tr=document.createElement('tr'); const i=LANG==='en'?1:0;
+      tr.innerHTML=`<td class="mono">${r[0]}</td><td class="num">${r[1]}</td><td>${r[2][i]}</td><td class="num">${r[3]==null?T('à calculer','to compute'):r[3]}</td><td class="num">${fmtInt(r[4])}</td><td>${r[5][i]}</td>`; tb.appendChild(tr);});
+  }
+  const g=document.getElementById('g30');
+  for(let r=0;r<5;r++)for(let c=0;c<6;c++){const s=document.createElement('span'); s.textContent=r*6+c+1; if(r<=2&&c<=2) s.className='j'; g.appendChild(s);}
+
+  // ---------- chart ----------
+  function drawChart(ours){
+    const el=document.getElementById('chart-time');
+    const W=760,H=330,L=70,R=20,Tp=16,B=42, ymin=-2, ymax=7;
+    const x=n=>L+(n-16)/(30-16)*(W-L-R), y=v=>Tp+(ymax-Math.log10(v))/(ymax-ymin)*(H-Tp-B);
+    const css=getComputedStyle(document.documentElement), col=k=>css.getPropertyValue(k).trim()||'#888';
+    let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${T('Temps de résolution des instances NUG','Solution time of NUG instances')}">`;
+    for(let e=ymin;e<=ymax;e++){const yy=y(Math.pow(10,e)); s+=`<line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" stroke="${col('--line')}" stroke-width="1"/>`;
+      const lab=(e>=0&&e<3)?String(Math.pow(10,e)):'10^'+e; s+=`<text x="${L-8}" y="${yy+4}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="11" fill="${col('--muted')}">${lab}</text>`;}
+    [16,18,20,22,24,26,28,30].forEach(n=>{s+=`<text x="${x(n)}" y="${H-B+18}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="11" fill="${col('--muted')}">${n}</text>`;});
+    s+=`<text x="${(L+W-R)/2}" y="${H-6}" text-anchor="middle" font-family="Fira Sans Condensed,sans-serif" font-size="12" fill="${col('--muted')}">${T("taille n de l'instance nugn","size n of instance nugn")}</text>`;
+    s+=`<text x="14" y="${(Tp+H-B)/2}" transform="rotate(-90 14 ${(Tp+H-B)/2})" text-anchor="middle" font-family="Fira Sans Condensed,sans-serif" font-size="12" fill="${col('--muted')}">${T('minutes (log)','minutes (log)')}</text>`;
+    function series(pts,color){ if(!pts.length)return ''; pts.sort((a,b)=>a[0]-b[0]); let d=''; pts.forEach((p,i)=>{d+=(i?'L':'M')+x(p[0]).toFixed(1)+' '+y(p[1]).toFixed(1)}); let o=`<path d="${d}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+      pts.forEach(p=>{o+=`<circle cx="${x(p[0])}" cy="${y(p[1])}" r="4.5" fill="${color}"><title>${p[2]} : ${fmtDur(p[1]*60)}</title></circle>`}); return o;}
+    const pp=Object.entries(PAPER).map(([k,v])=>[parseInt(k.slice(3)),v[1],k]);
+    const op=Object.entries(ours).map(([k,v])=>[parseInt(k.slice(3)),v,k]).filter(p=>p[1]>0&&p[0]>=16);
+    s+=series(pp,col('--terra'))+series(op,col('--run'))+'</svg>'; el.innerHTML=s;
+  }
+
+  // ---------- live state ----------
+  let files=null, lastOk=0, state=null, liveMsg=null;
+  function renderEmpty(){
+    document.getElementById('bannertxt').textContent = liveMsg ? liveMsg() : T("Lecture de l'état de la campagne…","Reading the campaign state…");
+    document.getElementById('running').innerHTML=`<div class="job" style="border-left-color:var(--line)"><h4>${T('Aucun calcul affiché pour l\'instant','No job shown yet')}</h4><div class="small">${T('Les calculs en cours apparaîtront ici avec leur nombre de nœuds et leur profil d\'arbre.','Running jobs will appear here with their node counts and tree profile.')}</div></div>`;
+    document.getElementById('agents').innerHTML=`<div class="small">${T('Aucun agent signalé.','No agent reported.')}</div>`;
+    document.getElementById('perinst').innerHTML=`<tr><td colspan="10" class="small">${T("Le tableau s'affiche dès que l'état est lu.","The table appears once the state file is read.")}</td></tr>`;
+    document.getElementById('queue').innerHTML=`<tr><td colspan="6" class="small">${T("La file s'affiche dès que l'état est lu.","The queue appears once the state file is read.")}</td></tr>`;
+  }
+  async function init(){
+    try{ files = await (window.claude && window.claude.use ? window.claude.use('files') : null); }catch(e){ files=null; }
+    if(!files){
+      // static hosting (GitHub Pages): read the state snapshot published next to the page
+      const tryFetch=async()=>{try{const r=await fetch('etat.json',{cache:'no-store'}); if(!r.ok) throw 0; state=await r.json(); lastOk=Date.now(); render();}catch(e){ if(!lastOk){liveMsg=()=>T("Le suivi en direct n'est pas disponible dans cette vue.","Live tracking is not available in this view."); renderEmpty();} }};
+      tryFetch(); setInterval(tryFetch,60000); return;
+    }
+    poll(); setInterval(poll,10000);
+  }
+  async function poll(){
+    try{
+      const r = await files.read('nug30/etat/etat.json');
+      state = JSON.parse(new TextDecoder().decode(r.bytes)); lastOk=Date.now(); render();
+    }catch(e){
+      const code=e&&e.code;
+      if(code==='not_granted'){liveMsg=()=>T("Accès aux fichiers du projet refusé : le suivi en direct est masqué.","Access to project files declined: live tracking is hidden."); renderEmpty(); return;}
+      if(!lastOk){liveMsg=()=>T("État de la campagne introuvable pour l'instant, nouvel essai dans 10 s.","Campaign state not found yet, retrying in 10 s.")+' ('+(code||'error')+')'; renderEmpty();}
+    }
+  }
+  function render(){
+    const now=Date.now()/1000, age=now-state.updated;
+    const jobs=state.jobs||[]; const run=jobs.filter(j=>j.status==='running'), done=jobs.filter(j=>j.status==='done'), pend=jobs.filter(j=>j.status==='pending');
+    const fresh=age<120;
+    document.getElementById('dot').className='dot'+(fresh?' live':'');
+    document.getElementById('bannertxt').innerHTML=T(`<b>${run.length}</b> calcul${run.length>1?'s':''} en cours, <b>${done.length}</b> terminé${done.length>1?'s':''}, <b>${pend.length}</b> en attente · état relu il y a ${fmtDur(Math.max(0,age))}${fresh?'':' (lanceur arrêté ?)'}`,
+      `<b>${run.length}</b> running, <b>${done.length}</b> done, <b>${pend.length}</b> waiting · state read ${fmtDur(Math.max(0,age))} ago${fresh?'':' (runner stopped?)'}`);
+    const m=state.machine||{}; document.getElementById('machine').textContent=`${m.cpu||''} · ${m.cores||'?'} ${T('cœurs','cores')} · ${T('charge','load')} ${m.load?fmtNum(m.load[0],2):'?'} · ${m.maxj||'?'} ${T('calculs à la fois','jobs at a time')}`;
+    const rc=document.getElementById('running');
+    if(!run.length){rc.innerHTML=`<div class="job" style="border-left-color:var(--line)"><h4>${T('Aucun calcul en cours','No job running')}</h4><div class="small">${T('La file attend ou est terminée.','The queue is waiting or finished.')}</div></div>`;}
+    else rc.innerHTML=run.map(j=>{const p=j.progress||{}; const el=j.start?now-j.start:null; const rate=(p.nodes&&p.elapsed_s)?p.nodes/p.elapsed_s:null;
+      const dep=p.nodes_depth||[]; const mx=Math.max(1,...dep.map(v=>Math.log10(v+1)));
+      const bars=dep.map(v=>`<span style="height:${(Math.log10(v+1)/mx*100).toFixed(0)}%" title="${fmtInt(v)}"></span>`).join('');
+      const est=(j.mode==='estimate');
+      const det=jobDetail(j,p,el,rate,now);
+      return `<div class="job"><h4>${esc(LANG==='en'&&j.label_en?j.label_en:j.label||j.id)}</h4><div class="small">${esc(LANG==='en'&&j.desc_en?j.desc_en:j.desc||'')}</div>
+      <div class="meta">${fmtInt(p.nodes||0)} ${est?T('nœuds évalués','nodes evaluated'):T('nœuds','nodes')} · ${rate?fmtInt(rate)+T(' nœuds/s',' nodes/s'):T('démarrage','starting')} · ${fmtDur(el)}${p.ub!=null?' · '+T('borne sup. ','incumbent ')+fmtInt(p.ub):''}</div>
+      ${det}
+      ${dep.length?`<div class="bars">${bars}</div><div class="small">${T('nœuds par profondeur (échelle log)','nodes per depth (log scale)')}</div>`:''}</div>`}).join('');
+    const ag=state.agents||[]; const ac=document.getElementById('agents');
+    ac.innerHTML=ag.length?ag.map(a=>`<div class="job" style="border-left-color:var(--navy)"><h4>${esc(LANG==='en'&&a.name?a.name:a.nom)} <span class="pill ${a.statut==='en cours'?'running':'done'}">${esc(LANG==='en'?(a.statut==='en cours'?'running':'done'):a.statut)}</span></h4><div class="small">${esc(LANG==='en'&&a.role_en?a.role_en:a.role||'')}</div></div>`).join(''):`<div class="small">${T('Aucun agent en ce moment.','No agent at the moment.')}</div>`;
+    const q=document.getElementById('queue'); const ours=staticOurs();
+    q.innerHTML=jobs.map(j=>{const res=j.result||{}; const p=j.progress||{}; const st=j.status.startsWith('failed')?'failed':j.status;
+      const lab=(LANG==='en'?{running:'running',done:'done',pending:'waiting',failed:'failed',interrupted:'interrupted'}:{running:'en cours',done:'terminé',pending:'en attente',failed:'échec',interrupted:'interrompu'})[st]||st;
+      let nodes=res.nodes!=null?res.nodes:p.nodes; let dur=res.wall_s!=null?res.wall_s:(j.start?((j.end||now)-j.start):null);
+      let optcell=''; if(res.opt!=null&&res.mode!=='estimate'){const ok=OPT[j.instance]===res.opt; optcell=`${fmtInt(res.opt)} <span class="${ok?'check':'cross'}">${ok?'✓':'≠ '+fmtInt(OPT[j.instance])}</span>`}
+      let cmp=''; const P=PAPER[j.instance];
+      if(res.mode==='estimate'){nodes=res.est_nodes; optcell=T('estimation','estimate'); cmp=T(`≈ ${fmtBig(res.est_nodes)} nœuds, ≈ ${fmtDur(res.est_time_s)} sur 1 cœur`,`≈ ${fmtBig(res.est_nodes)} nodes, ≈ ${fmtDur(res.est_time_s)} on 1 core`)+` (± ${(100*res.est_nodes_stderr/res.est_nodes).toFixed(0)} %)`;}
+      else if(P&&res.wall_s!=null){cmp=T(`papier : ${fmtBig(P[0])} nœuds, ${fmtDur(P[1]*60)} ; ici ${(P[1]*60/res.wall_s).toFixed(0)} fois plus rapide`,`paper: ${fmtBig(P[0])} nodes, ${fmtDur(P[1]*60)}; here ${(P[1]*60/res.wall_s).toFixed(0)} times faster`); }
+      else if(P) cmp=T(`papier : ${fmtBig(P[0])} nœuds, ${fmtDur(P[1]*60)}`,`paper: ${fmtBig(P[0])} nodes, ${fmtDur(P[1]*60)}`);
+      if(st==='done'&&res.wall_s!=null&&res.mode!=='estimate'&&(j.args||'').includes('-nointprune')) ours[j.instance]=res.wall_s/60;
+      return `<tr><td><span class="pill ${st}">${lab}</span></td><td>${esc(LANG==='en'&&j.label_en?j.label_en:j.label||j.id)}<div class="small mono">${esc(j.args||'')}</div></td><td class="num">${nodes!=null?fmtBig(nodes):''}</td><td class="num">${fmtDur(dur)}</td><td class="num">${optcell}</td><td class="small">${cmp}</td></tr>`}).join('');
+    drawChart(ours);
+    renderPerInst(jobs, now);
+  }
+  const openDet=new Set();
+  document.addEventListener('toggle',e=>{const d=e.target; if(d.dataset&&d.dataset.job){ d.open?openDet.add(d.dataset.job):openDet.delete(d.dataset.job);} },true);
+  function clock(ts){ if(!ts) return '?'; const d=new Date(ts*1000); return d.toLocaleString(LANG==='en'?'en-GB':'fr-FR',{weekday:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
+  function jobDetail(j,p,el,rate,now){
+    let pct=null, eta=null, basis='', extra='';
+    if(j.mode==='estimate'){
+      if(p.dives_total){ pct=p.dives_done/p.dives_total; if(p.dives_done>0) eta=el*(1/pct-1);
+        basis=T(`${p.dives_done} plongées sur ${p.dives_total}`,`${p.dives_done} of ${p.dives_total} dives`);
+        if(p.est_nodes) extra=T(`estimation provisoire : ${fmtBig(p.est_nodes)} nœuds, ${fmtDur(p.est_time_s)} sur 1 cœur`,`running estimate: ${fmtBig(p.est_nodes)} nodes, ${fmtDur(p.est_time_s)} on 1 core`);
+      } else basis=T("progression non publiée par ce calcul (lancé avant l'ajout du suivi des plongées)","progress not reported by this job (started before dive tracking was added)");
+    } else {
+      const kj=(state.jobs||[]).find(x=>x.instance===j.instance&&x.mode==='estimate'&&x.status==='done'&&x.result);
+      let pred=null;
+      if(kj){pred=kj.result.est_nodes; basis=T(`repère : estimation de Knuth, ${fmtBig(pred)} nœuds`,`reference: Knuth estimate, ${fmtBig(pred)} nodes`);}
+      else if(PAPER[j.instance]){pred=PAPER[j.instance][0]; basis=T(`repère : arbre du papier, ${fmtBig(pred)} nœuds`,`reference: paper's tree, ${fmtBig(pred)} nodes`);}
+      if(pred&&p.nodes!=null){
+        if(p.nodes<pred){pct=p.nodes/pred; if(rate) eta=(pred-p.nodes)/rate;}
+        else {pct=null; extra=T("le repère est dépassé : la fin ne peut pas être prédite, l'arbre est plus grand que prévu","the reference is exceeded: the end cannot be predicted, the tree is larger than expected");}
+      } else if(!pred) basis=T("aucun repère de taille d'arbre pour cette instance","no tree-size reference for this instance");
+    }
+    const endtxt = eta!=null ? `${clock(now+eta)} (${T('dans','in')} ${fmtDur(eta)})` : T('inconnue','unknown');
+    return `<details data-job="${esc(j.id)}" ${openDet.has(j.id)?'open':''}><summary>${T('Détail en temps réel','Live detail')}</summary>
+      ${pct!=null?`<div class="pbar" role="progressbar" aria-valuenow="${Math.round(100*Math.min(pct,1))}" aria-valuemin="0" aria-valuemax="100"><i style="width:${(100*Math.min(pct,1)).toFixed(1)}%"></i></div>`:''}
+      <dl class="kv"><dt>${T('Début','Start')}</dt><dd>${clock(j.start)}</dd>
+      <dt>${T('Écoulé','Elapsed')}</dt><dd>${fmtDur(el)}</dd>
+      <dt>${T('Avancement','Progress')}</dt><dd>${pct!=null?(100*Math.min(pct,1)).toFixed(1)+' % · ':''}${basis}</dd>
+      <dt>${T('Fin prévue','Expected end')}</dt><dd>${endtxt}</dd>
+      ${extra?`<dt></dt><dd>${extra}</dd>`:''}
+      <dt>${T('Commande','Command')}</dt><dd>${esc(j.mode||'solve')} ${esc(j.args||'')}</dd></dl>
+      <div class="small">${T("La fin prévue d'une résolution suppose un débit constant et un arbre de la taille du repère ; c'est une indication, pas une garantie.","A solve's expected end assumes a constant rate and a tree of the reference size; it is an indication, not a guarantee.")}</div>
+    </details>`;
+  }
+  function renderPerInst(jobs, now){
+    const by={}, order=[];
+    jobs.forEach((j,ix)=>{ if(!by[j.instance]){by[j.instance]={};order.push(j.instance);} const k=(j.mode==='estimate')?'k':'r'; if(!by[j.instance][k]||j.status==='running'||j.status==='done') by[j.instance][k]={j,ix}; });
+    const L=st=>(LANG==='en'?{running:'running',done:'done',pending:'waiting',failed:'failed',interrupted:'interrupted'}:{running:'en cours',done:'terminé',pending:'en attente',failed:'échec',interrupted:'interrompu'})[st]||st;
+    const pill=(e,first)=>{ if(!e) return '<span class="small">–</span>'; const st=e.j.status.startsWith('failed')?'failed':e.j.status; return `${first?'① ':'② '}<span class="pill ${st}">${L(st)}</span>`; };
+    const dur=e=>{ if(!e) return ''; const r=e.j.result||{}; return fmtDur(r.wall_s!=null?r.wall_s:(e.j.start?((e.j.end||now)-e.j.start):null)); };
+    document.getElementById('perinst').innerHTML=order.map(inst=>{
+      const k=by[inst].k, r=by[inst].r; const kr=k&&k.j.result||{}, rr=r&&r.j.result||{}, rp=r&&r.j.progress||{};
+      const kfirst = k&&(!r || (k.j.start||1e12) < (r.j.start||1e12) || (!r.j.start && k.ix<r.ix));
+      const kn = kr.est_nodes!=null ? `${fmtBig(kr.est_nodes)} <span class="small">± ${(100*kr.est_nodes_stderr/kr.est_nodes).toFixed(0)} %</span>` : '';
+      const rn = rr.nodes!=null ? fmtBig(rr.nodes) : (rp.nodes!=null ? fmtBig(rp.nodes)+' …' : '');
+      let opt=''; if(rr.opt!=null){const ok=OPT[inst]===rr.opt; opt=`${fmtInt(rr.opt)} <span class="${ok?'check':'cross'}">${ok?'✓':'≠'}</span>`}
+      const ratio = (kr.est_nodes!=null && rr.nodes!=null) ? (kr.est_nodes/rr.nodes).toFixed(2) : '';
+      const P=PAPER[inst]; const pap=P?T(`${fmtBig(P[0])} nœuds, ${fmtDur(P[1]*60)}`,`${fmtBig(P[0])} nodes, ${fmtDur(P[1]*60)}`):'';
+      return `<tr><td><b>${esc(inst)}</b></td><td>${pill(k,kfirst)}</td><td class="num">${kn}</td><td class="num">${dur(k)}</td><td>${pill(r,!kfirst)}</td><td class="num">${rn}</td><td class="num">${dur(r)}</td><td class="num">${opt}</td><td class="num">${ratio}</td><td class="small">${pap}</td></tr>`;
+    }).join('');
+  }
+  const pb=document.getElementById('prizebtn'), pp=document.getElementById('prizepop');
+  pb.addEventListener('click',e=>{e.stopPropagation(); const open=pp.hidden; pp.hidden=!open; pb.setAttribute('aria-expanded',open?'true':'false');});
+  document.addEventListener('click',e=>{if(!pp.hidden&&!pp.contains(e.target)){pp.hidden=true;pb.setAttribute('aria-expanded','false');}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!pp.hidden){pp.hidden=true;pb.setAttribute('aria-expanded','false');pb.focus();}});
+  setLang(LANG);
+  init();
+})();
+</script>
+
+</body></html>

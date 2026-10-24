@@ -1,0 +1,14 @@
+{
+ "id": "r1_nug16a_C",
+ "group": "Reproduction 2001-2002",
+ "instance": "nug16a",
+ "mode": "solve",
+ "args": "-strat C -ub 1611 -nointprune",
+ "label": "nug16a, stratégie C, conditions du papier",
+ "desc": "Validation : borne initiale = optimum + 1, comme dans Brixius-Anstreicher 2001.",
+ "status": "done",
+ "start": 1792854920.1714506,
+ "host": "vm",
+ "pid": 1681,
+ "end": 1792854941.9944043
+}

@@ -1,0 +1,14 @@
+{
+ "id": "r1_nug21_C",
+ "group": "Reproduction 2001-2002",
+ "instance": "nug21",
+ "mode": "solve",
+ "args": "-strat C -ub 2439 -nointprune",
+ "label": "nug21, stratégie C, conditions du papier",
+ "desc": "Papier : 1 698 093 nœuds, 212,3 min.",
+ "status": "done",
+ "start": 1792855252.6956809,
+ "host": "vm",
+ "pid": 2464,
+ "end": 1792855639.7948565
+}

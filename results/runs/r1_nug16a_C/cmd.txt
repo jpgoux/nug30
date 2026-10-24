@@ -1,0 +1,1 @@
+/tmp/claude-0/qap/bin/qap_bb solve /mnt/project-files/nug30/data/nug16a.dat -strat C -ub 1611 -nointprune -prog /mnt/project-files/nug30/runs/r1_nug16a_C/progress.json

@@ -1,0 +1,14 @@
+{
+ "id": "e1_nug30_D",
+ "group": "Estimation NUG30",
+ "instance": "nug30",
+ "mode": "estimate",
+ "args": "-strat D -dives 300 -q 1.5 -seed 7 -ub 6125 -nointprune",
+ "label": "nug30, estimation de Knuth, 300 plongées",
+ "desc": "Taille d'arbre et temps estimés sur un cœur, méthode de l'article de 2002 (échantillonnage pondéré q = 1,5).",
+ "status": "failed(-15)",
+ "start": 1792854998.1879468,
+ "host": "vm",
+ "pid": 2095,
+ "end": 1792855656.831442
+}

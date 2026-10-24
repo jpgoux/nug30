@@ -1,0 +1,14 @@
+{
+ "id": "r1_nug22_C",
+ "group": "Reproduction 2001-2002",
+ "instance": "nug22",
+ "mode": "solve",
+ "args": "-strat C -ub 3597 -nointprune",
+ "label": "nug22, stratégie C, conditions du papier",
+ "desc": "Papier : 1 225 892 nœuds, 134,3 min.",
+ "status": "done",
+ "start": 1792855640.2395585,
+ "host": "vm",
+ "pid": 3005,
+ "end": 1792856375.9542272
+}

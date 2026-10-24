@@ -1,0 +1,1 @@
+/tmp/claude-0/qap/bin/qap_bb estimate /mnt/project-files/nug30/data/nug22.dat -strat C -dives 400 -q 1.5 -seed 7 -ub 3597 -nointprune -prog /mnt/project-files/nug30/runs/k1_nug22_C/progress.json

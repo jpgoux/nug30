@@ -1,0 +1,1 @@
+{"mode":"solve","strategy":"C","n":14,"opt":1014,"heuristic":1014,"t_heur":0.03,"nodes":2389,"laps":1417362,"fw_iters":1417362,"wall_s":7.73,"cpu_bound_s":0.35,"threads":1,"tasks":0,"symA":1,"symB":1,"perm":[9,8,13,2,1,11,7,14,3,4,12,5,6,10],"nodes_depth":[1,14,165,404,353,871,420,125,25,7,2,2]}

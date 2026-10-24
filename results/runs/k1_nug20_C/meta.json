@@ -1,0 +1,16 @@
+{
+ "id": "k1_nug20_C",
+ "group": "Calibration Knuth",
+ "instance": "nug20",
+ "mode": "estimate",
+ "args": "-strat C -dives 400 -q 1.5 -seed 7 -ub 2571 -nointprune",
+ "label": "nug20, estimation de Knuth (400 plongées)",
+ "label_en": "nug20, Knuth estimate (400 dives)",
+ "desc": "Calibration : comparer l'estimation à la vraie taille d'arbre avant de croire l'estimation de NUG30.",
+ "desc_en": "Calibration: compare the estimate with the true tree size before trusting the NUG30 estimate.",
+ "status": "done",
+ "start": 1792855657.3011887,
+ "host": "vm",
+ "pid": 3019,
+ "end": 1792855938.9017987
+}

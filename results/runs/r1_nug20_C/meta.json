@@ -1,0 +1,14 @@
+{
+ "id": "r1_nug20_C",
+ "group": "Reproduction 2001-2002",
+ "instance": "nug20",
+ "mode": "solve",
+ "args": "-strat C -ub 2571 -nointprune",
+ "label": "nug20, stratégie C, conditions du papier",
+ "desc": "Papier OMS 2001 : 1 040 308 nœuds, 145,8 min sur HP C3000.",
+ "status": "done",
+ "start": 1792854942.2636232,
+ "host": "vm",
+ "pid": 1690,
+ "end": 1792855252.2946045
+}
