@@ -9,8 +9,9 @@
  "label_en": "nug24, strategy D, paper conditions",
  "desc_en": "Paper: 31,865,440 nodes, 5,829.9 min. Per-depth counters (time, bound gap, iterations) recorded for the next steps.",
  "hold": false,
- "status": "running",
+ "status": "done",
  "start": 1792858509.0529976,
  "host": "vm",
- "pid": 6772
+ "pid": 6772,
+ "end": 1792869591.3555567
 }
