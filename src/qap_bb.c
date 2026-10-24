@@ -175,7 +175,7 @@ static inline double min_except(const double *h, int jx, int dim) {
 }
 #endif
 
-static int opt_simdlap = 0, opt_spkeep = 0;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
+static int opt_simdlap = 0, opt_spkeep = 0, opt_spu = 1;   /* SIMD rewrite measured slower on nug16a (9.0 s vs 8.6 s) */
 static double lap_jv(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v, int warm) {
     int colsol[NMAX], freer[NMAX], collist[NMAX], matches[NMAX], pred[NMAX];
     double d[NMAX];
@@ -334,7 +334,9 @@ static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
         do { i = pred[j]; colsol[j] = i; int k = rowsol[i]; rowsol[i] = j; j = k; } while (i != fr);
     }
     double tot = 0;
-    for (int i = 0; i < dim; i++) {
+    if (opt_spu) for (int i = 0; i < dim; i++) {   /* complementary slackness: zero reduced cost on the assignment */
+        int j = rowsol[i]; u[i] = c[i][j] - v[j]; tot += u[i];
+    } else for (int i = 0; i < dim; i++) {
         double mn = INFINITY; const double *ci = c[i];
         for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; mn = h < mn ? h : mn; }
         u[i] = mn; tot += mn;
@@ -472,8 +474,8 @@ static void applyM(work_t *w, int m, const double X[NMAX][NMAX], double out[NMAX
 }
 
 /* M(P) for a permutation p (row i -> column p[i]); also APB = Ar P Br */
-static int opt_incr = 1;   /* incremental update of Ar P Br between Frank-Wolfe iterations */
-static void applyMperm(work_t *w, int m, const int *p, double out[NMAX][NMAX]) {
+static int opt_incr = 1, opt_fuse = 1;   /* incremental update of Ar P Br between Frank-Wolfe iterations */
+static void applyMperm(work_t *w, int m, const int *p, double out[NMAX][NMAX], double *xmp) {
     /* (Ar P Br)[i][j] = sum_k Ar[i][k] Br[p[k]][j].  Successive LAP solutions
      * usually differ in a few positions k; then APB changes by the rank-one
      * terms Ar[:,k] (Br[p[k]] - Br[pprev[k]]), O(m^2) each instead of O(m^3). */
@@ -501,6 +503,12 @@ static void applyMperm(work_t *w, int m, const int *p, double out[NMAX][NMAX]) {
     }
     memcpy(w->pprev, p, sizeof(int) * m);
     int pinv[NMAX]; for (int k = 0; k < m; k++) pinv[p[k]] = k;
+    if (xmp) {   /* also <X, M(P)>, for the line search */
+        double acc = 0;
+        for (int i = 0; i < m; i++) { const double *tp = w->Tp[p[i]], *sp = w->Sp[i], *ab = w->APB[i], *x = w->X[i]; double *o = out[i];
+            for (int j = 0; j < m; j++) { double t = ab[j] - sp[pinv[j]] - tp[j]; o[j] = t; acc += x[j] * t; } }
+        *xmp = acc;
+    } else
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++)
         /* (Sp P)[i][j] = Sp[i][pinv[j]] ; (P Tp)[i][j] = Tp[p[i]][j] */
         out[i][j] = w->APB[i][j] - w->Sp[i][pinv[j]] - w->Tp[p[i]][j];
@@ -527,12 +535,14 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         for (int j = 0; j < m; j++) { double t = 0; for (int k = 0; k < m; k++) t += w->Br[k][j]; cb[j] = t; }
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->MX[i][j] = ra[i] * cb[j] * inv;
     }
-    double f = dotm(m, w->X, w->MX) + dotm(m, w->Cr, w->X) + w->trST;
+    double s2 = dotm(m, w->Cr, w->X);   /* <Cr, X>, kept up to date in O(m) when opt_fuse */
+    double f = dotm(m, w->X, w->MX) + s2 + w->trST;
+    if (opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
     double best = -INFINITY, u[NMAX], v[NMAX];
     int p[NMAX];
     double hist_best_at[8]; int it;
     for (it = 0; it < nfw; it++) {
-        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
+        if (!opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
         double lapv;
         if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
         else if (opt_lap == 3 && it == 0) lapv = lap_jv(m, w->G, p, u, v, 0);   /* JV with its own column reduction */
@@ -546,7 +556,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             lapv = lap_jv(m, w->G, p, u, v, 1);
         }
         w->nlap++;
-        double gx = dotm(m, w->G, w->X);
+        /* <G, X> = 2 <MX, X> + <Cr, X>, and f = <MX, X> + <Cr, X> + trST */
+        double gx = opt_fuse ? 2 * (f - w->trST - s2) + s2 : dotm(m, w->G, w->X);
         double z = f - gx + lapv + K;
         if (z > best) {
             best = z;
@@ -554,7 +565,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             /* shift: we store z without K? no: z includes K */
         }
         if (best > target) { it++; break; }
-        applyMperm(w, m, p, w->MP);
+        double xmp = 0;
+        applyMperm(w, m, p, w->MP, opt_fuse ? &xmp : NULL);
         /* cost of the permutation p (upper bound) */
         double cp = K; for (int i = 0; i < m; i++) cp += w->APB[i][p[i]] * 0; /* placeholder */
         {
@@ -567,6 +579,10 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         /* line search on D = P - X */
         double gd = lapv - gx;            /* <G, P - X> = <G,P> - <G,X>, <G,P> = lap value */
         double q = 0;
+        if (opt_fuse) {   /* q = <P - X, MP - MX> = sum_i (MP - MX)[i][p_i] - <X, MP> + <X, MX> */
+            for (int i = 0; i < m; i++) q += w->MP[i][p[i]] - w->MX[i][p[i]];
+            q += (f - w->trST - s2) - xmp;
+        } else
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) {
             double d = ((p[i] == j) ? 1.0 : 0.0) - w->X[i][j];
             double md = w->MP[i][j] - w->MX[i][j];
@@ -574,6 +590,13 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         double alpha = (q > 1e-12) ? -gd / (2 * q) : 1.0;
         if (alpha > 1) alpha = 1; if (alpha <= 0) { it++; break; }
+        if (opt_fuse) {   /* X, MX and the next gradient G in one pass */
+            double b = 1 - alpha, cpx = 0;
+            for (int i = 0; i < m; i++) { double *x = w->X[i], *mx = w->MX[i], *g = w->G[i]; const double *mp = w->MP[i], *cr = w->Cr[i];
+                for (int j = 0; j < m; j++) { x[j] *= b; double t = mx[j] + alpha * (mp[j] - mx[j]); mx[j] = t; g[j] = 2 * t + cr[j]; }
+                x[p[i]] += alpha; cpx += cr[p[i]]; }
+            s2 = b * s2 + alpha * cpx;
+        } else
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) {
             double d = ((p[i] == j) ? 1.0 : 0.0) - w->X[i][j];
             w->X[i][j] += alpha * d;
@@ -1125,6 +1148,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nofastmm")) opt_fastmm = 0;
         else if (!strcmp(argv[a], "-nosimdlap")) opt_simdlap = 0;
         else if (!strcmp(argv[a], "-nospkeep")) opt_spkeep = 0;
+        else if (!strcmp(argv[a], "-nospu")) opt_spu = 0;
+        else if (!strcmp(argv[a], "-nofuse")) opt_fuse = 0;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
         else if (!strcmp(argv[a], "-sb")) opt_sb = atoi(argv[++a]);
