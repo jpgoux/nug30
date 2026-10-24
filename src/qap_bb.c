@@ -245,16 +245,39 @@ static void init_V(void) {
 }
 
 /* ---------- workspace for one bound computation ---------- */
+/* Spectral data of V^T M V depends only on the set of free rows (A side) or
+ * free columns (B side): siblings and look-ahead candidates share it. */
+#define ECACHE 512
+typedef struct { unsigned mask; int m; double lam[NMAX]; double VW[NMAX][NMAX]; } eig_t;
 typedef struct {
+    eig_t ea[ECACHE], eb[ECACHE];
+    long hits, miss;
     double Ar[NMAX][NMAX], Br[NMAX][NMAX], Cr[NMAX][NMAX];
     double Sp[NMAX][NMAX], Tp[NMAX][NMAX];
     double X[NMAX][NMAX], MX[NMAX][NMAX], G[NMAX][NMAX], MP[NMAX][NMAX], U[NMAX][NMAX];
     double APB[NMAX][NMAX];
+    int pprev[NMAX], apb_ok, apb_age;
+    unsigned maskF, maskL;              /* free facilities / locations of the node being evaluated */   /* incremental Ar P Br: permutation behind APB */
     double trST;
     long nlap, nfw;
 } work_t;
 
+/* c = a b for m <= W: rows of NMAX doubles, the j loop has a constant trip
+ * count W so it compiles to full-width FMAs; columns j >= m of c hold junk
+ * that is never read (column j of c only depends on column j of b). */
+#define MM_W(W) static void matmul_w##W(int m, const double a[NMAX][NMAX], const double b[NMAX][NMAX], double c[NMAX][NMAX]) { \
+    for (int i = 0; i < m; i++) { double acc[W] = {0}; \
+        for (int k = 0; k < m; k++) { double aik = a[i][k]; \
+            for (int j = 0; j < W; j++) acc[j] += aik * b[k][j]; } \
+        for (int j = 0; j < W; j++) c[i][j] = acc[j]; } }
+MM_W(8) MM_W(16) MM_W(24) MM_W(32)
+static int opt_fastmm = 0;
+static void matmul_fast(int m, const double a[NMAX][NMAX], const double b[NMAX][NMAX], double c[NMAX][NMAX]) {
+    if (m <= 8) matmul_w8(m, a, b, c); else if (m <= 16) matmul_w16(m, a, b, c);
+    else if (m <= 24) matmul_w24(m, a, b, c); else matmul_w32(m, a, b, c);
+}
 static void matmul(int m, const double a[NMAX][NMAX], const double b[NMAX][NMAX], double c[NMAX][NMAX]) {
+    if (opt_fastmm) { matmul_fast(m, a, b, c); return; }
     for (int i = 0; i < m; i++) {
         double row[NMAX] = {0};
         for (int k = 0; k < m; k++) { double aik = a[i][k]; if (aik == 0) continue;
@@ -289,17 +312,38 @@ static void build_proj(int m, const double W[NMAX][NMAX], const double *s, doubl
         out[i][j] = out[j][i] = t; }
 }
 
+static int opt_ecache = 1, opt_memo = 1;
+
+static const eig_t *get_eig(work_t *w, eig_t *tab, unsigned mask, int m, const double M[NMAX][NMAX]) {
+    unsigned h = (mask * 2654435761u) >> 23;   /* 9 bits */
+    eig_t *e = &tab[h & (ECACHE - 1)];
+    if (opt_ecache && e->m == m && e->mask == mask) { w->hits++; return e; }
+    w->miss++;
+    double W[NMAX][NMAX]; int k = m - 1;
+    proj_eig(m, M, e->lam, W);
+    for (int i = 0; i < m; i++) for (int j = 0; j < k; j++) {
+        double t = 0; for (int l = 0; l < k; l++) t += Vb[m][i][l] * W[l][j]; e->VW[i][j] = t; }
+    e->mask = mask; e->m = m;
+    return e;
+}
+static void build_from_vw(int m, const double VW[NMAX][NMAX], const double *s, double out[NMAX][NMAX]) {
+    int k = m - 1;
+    for (int i = 0; i < m; i++) {
+        double r[NMAX]; for (int l = 0; l < k; l++) r[l] = VW[i][l] * s[l];
+        for (int j = 0; j <= i; j++) { double t = 0; for (int l = 0; l < k; l++) t += r[l] * VW[j][l]; out[i][j] = out[j][i] = t; }
+    }
+}
 /* setup of the QPB quadratic: computes Sp, Tp, trST for current Ar, Br */
 static double setup_qpb(work_t *w, int m) {
     int k = m - 1;
-    double la[NMAX], mu[NMAX], WA[NMAX][NMAX], WB[NMAX][NMAX], L[NMAX][NMAX], s[NMAX], t[NMAX];
+    double L[NMAX][NMAX], s[NMAX], t[NMAX];
     int sol[NMAX];
-    proj_eig(m, w->Ar, la, WA);
-    proj_eig(m, w->Br, mu, WB);
-    for (int i = 0; i < k; i++) for (int j = 0; j < k; j++) L[i][j] = la[i] * mu[j];
+    const eig_t *ea = get_eig(w, w->ea, w->maskF, m, w->Ar);
+    const eig_t *eb = get_eig(w, w->eb, w->maskL, m, w->Br);
+    for (int i = 0; i < k; i++) for (int j = 0; j < k; j++) L[i][j] = ea->lam[i] * eb->lam[j];
     double pb = lap(k, L, sol, s, t);   /* <lambda, mu>_-  and its dual s, t */
-    build_proj(m, WA, s, w->Sp);
-    build_proj(m, WB, t, w->Tp);
+    build_from_vw(m, ea->VW, s, w->Sp);
+    build_from_vw(m, eb->VW, t, w->Tp);
     w->trST = pb;
     return pb;
 }
@@ -316,11 +360,30 @@ static void applyM(work_t *w, int m, const double X[NMAX][NMAX], double out[NMAX
 }
 
 /* M(P) for a permutation p (row i -> column p[i]); also APB = Ar P Br */
+static int opt_incr = 1;   /* incremental update of Ar P Br between Frank-Wolfe iterations */
 static void applyMperm(work_t *w, int m, const int *p, double out[NMAX][NMAX]) {
-    /* (Ar P Br)[i][j] = sum_k Ar[i][k] Br[p[k]][j] */
-    double PB[NMAX][NMAX];
-    for (int k = 0; k < m; k++) memcpy(PB[k], w->Br[p[k]], sizeof(double) * m);
-    matmul(m, w->Ar, PB, w->APB);
+    /* (Ar P Br)[i][j] = sum_k Ar[i][k] Br[p[k]][j].  Successive LAP solutions
+     * usually differ in a few positions k; then APB changes by the rank-one
+     * terms Ar[:,k] (Br[p[k]] - Br[pprev[k]]), O(m^2) each instead of O(m^3). */
+    int D[NMAX], nd = 0;
+    if (opt_incr && w->apb_ok && w->apb_age < 64) {
+        for (int k = 0; k < m; k++) if (p[k] != w->pprev[k]) D[nd++] = k;
+    } else nd = m + 1;
+    if (nd <= m / 2) {
+        for (int t = 0; t < nd; t++) {
+            int k = D[t]; const double *bn = w->Br[p[k]], *bo = w->Br[w->pprev[k]];
+            double db[NMAX]; for (int j = 0; j < NMAX; j++) db[j] = (j < m) ? bn[j] - bo[j] : 0;
+            for (int i = 0; i < m; i++) { double a = w->Ar[i][k];
+                for (int j = 0; j < NMAX; j++) w->APB[i][j] += a * db[j]; }
+        }
+        w->apb_age++;
+    } else {
+        double PB[NMAX][NMAX];
+        for (int k = 0; k < m; k++) memcpy(PB[k], w->Br[p[k]], sizeof(double) * m);
+        matmul(m, w->Ar, PB, w->APB);
+        w->apb_ok = 1; w->apb_age = 0;
+    }
+    memcpy(w->pprev, p, sizeof(int) * m);
     int pinv[NMAX]; for (int k = 0; k < m; k++) pinv[p[k]] = k;
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++)
         /* (Sp P)[i][j] = Sp[i][pinv[j]] ; (P Tp)[i][j] = Tp[p[i]][j] */
@@ -339,9 +402,15 @@ static inline double dotm(int m, const double a[NMAX][NMAX], const double b[NMAX
 static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw2,
                      double *ub_found, int *bestp) {
     setup_qpb(w, m);
+    w->apb_ok = 0;
     double inv = 1.0 / m;
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] = inv;
-    applyM(w, m, w->X, w->MX);
+    {   /* X0 = ee^T/m: Ar X0 Br = (Ar e)(e^T Br)/m, and Sp e = 0, e^T Tp = 0 */
+        double ra[NMAX], cb[NMAX];
+        for (int i = 0; i < m; i++) { double t = 0; for (int k = 0; k < m; k++) t += w->Ar[i][k]; ra[i] = t; }
+        for (int j = 0; j < m; j++) { double t = 0; for (int k = 0; k < m; k++) t += w->Br[k][j]; cb[j] = t; }
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->MX[i][j] = ra[i] * cb[j] * inv;
+    }
     double f = dotm(m, w->X, w->MX) + dotm(m, w->Cr, w->X) + w->trST;
     double best = -INFINITY, u[NMAX], v[NMAX];
     int p[NMAX];
@@ -474,8 +543,9 @@ typedef struct { int m; int F[NMAX], L[NMAX]; double z; double K; } eval_t;
 
 static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
     int m = 0, mc = 0;
-    for (int i = 0; i < N; i++) if (nd->rc[i] < 0) ev->F[m++] = i;
-    for (int j = 0; j < N; j++) if (nd->cr[j] < 0) ev->L[mc++] = j;
+    w->maskF = w->maskL = 0;
+    for (int i = 0; i < N; i++) if (nd->rc[i] < 0) { ev->F[m++] = i; w->maskF |= 1u << i; }
+    for (int j = 0; j < N; j++) if (nd->cr[j] < 0) { ev->L[mc++] = j; w->maskL |= 1u << j; }
     ev->m = m;
     double K = 0;
     for (int i = 0; i < N; i++) if (nd->rc[i] >= 0) for (int k = 0; k < N; k++) if (nd->rc[k] >= 0)
@@ -588,6 +658,11 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         work_t *w2 = malloc(sizeof(work_t)); w2->nlap = w2->nfw = 0;
         double bestscore = -INFINITY; int bk = best_kind, bl = best_line;
         double zline[NMAX];
+        /* child (a,b) appears in the candidate list of row a and of column b:
+         * evaluate it once (the evaluation is deterministic) */
+        static __thread double memo_z[NMAX][NMAX], memo_v[NMAX][NMAX];
+        static __thread unsigned char memo_ok[NMAX][NMAX];
+        memset(memo_ok, 0, sizeof memo_ok);
         for (int c = 0; c < nc; c++) {
             double score = 0;
             for (int o = 0; o < m; o++) {
@@ -596,6 +671,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 if (cands[c].kind == 0 ? !repCol[b] : !repRow[a]) continue;
                 double zij, vij = 0;
                 if (z + Ueff[a][b] > thr) zij = z + Ueff[a][b];      /* eliminated child: bound from U */
+                else if (opt_memo && memo_ok[a][b]) { zij = memo_z[a][b]; vij = memo_v[a][b]; }
                 else {
                     node_t chn = *nd; chn.rc[ev->F[a]] = ev->L[b]; chn.cr[ev->L[b]] = ev->F[a]; chn.depth++;
                     eval_t e2; eval_node(&chn, w2, &e2, R->nfw3, R->nfw3, who);
@@ -605,6 +681,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                             for (int y = 0; y < e2.m; y++) { rs += w2->U[x][y]; cs += w2->U[y][x]; }
                             if (rs > vij) vij = rs; if (cs > vij) vij = cs; }
                     }
+                    memo_z[a][b] = zij; memo_v[a][b] = vij; memo_ok[a][b] = 1;
                 }
                 zline[o] = zij;
                 score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, 1e15);
@@ -824,6 +901,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nfw")) opt_nfw = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-dives")) dives = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-q")) opt_q = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-noincr")) opt_incr = 0;
+        else if (!strcmp(argv[a], "-noecache")) opt_ecache = 0;
+        else if (!strcmp(argv[a], "-nomemo")) opt_memo = 0;
+        else if (!strcmp(argv[a], "-nofastmm")) opt_fastmm = 0;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
         else if (!strcmp(argv[a], "-sb")) opt_sb = atoi(argv[++a]);

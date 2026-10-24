@@ -1,2 +1,5 @@
 src/qap_bb
 *.o
+src/qap_bb
+src/test_qap
+src/regress.out

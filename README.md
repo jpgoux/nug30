@@ -17,6 +17,8 @@ Le site du laboratoire (bilingue, suivi des calculs) est dans `docs/index.html` 
 | Dossier | Contenu |
 |---|---|
 | `src/qap_bb.c` | Solveur C : borne QPB (Anstreicher-Brixius), Frank-Wolfe avec recherche linéaire exacte, LAP hongrois puis Jonker-Volgenant à chaud, règles de branchement 2, 3 et 4 et stratégies A à E de Brixius-Anstreicher (OMS 2001), symétries des matrices de distance (groupes d'automorphismes), estimateur de Knuth, mode parallèle à pool partagé (threads). |
+| `src/reference/qap_bb_campagne.c` | Code tel qu'utilisé pour la campagne nug12 à nug24 (algorithme de 2000), gardé comme référence. |
+| `src/test_qap.c`, `tests/` | Tests contre la force brute (LAP, validité de la borne, B&B complet avec et sans symétries) et banc de non-régression (optimum et empreinte de l'arbre). |
 | `scripts/campagne.py` | Lanceur de la campagne : file de calculs, état écrit toutes les 5 s pour le site. |
 | `data/qaplib/` | Instances nug de QAPLIB et solutions connues, copiées depuis [mhahsler/qap](https://github.com/mhahsler/qap). |
 | `results/` | Résultats JSON de chaque calcul, estimations de Knuth comprises (commande, nœuds, temps, permutation optimale). |
@@ -30,6 +32,7 @@ cd src && make            # gcc, LAPACK, BLAS (Debian/Ubuntu : liblapack-dev, li
 ./qap_bb solve ../data/qaplib/nug20.dat -strat C -ub 2571 -nointprune
 ./qap_bb estimate ../data/qaplib/nug25.dat -strat D -dives 400 -q 1.5
 ./qap_bb par ../data/qaplib/nug17.dat -strat C -threads 4
+make test                 # tests et banc de non-régression, environ 1 min 30 s
 ```
 
 `-ub opt+1 -nointprune` reproduit les conditions de l'article : on prouve l'optimalité avec une borne supérieure fixée à l'optimum plus un.
@@ -68,6 +71,8 @@ The lab site (bilingual, live tracking) is `docs/index.html` and can be served b
 | Folder | Contents |
 |---|---|
 | `src/qap_bb.c` | C solver: QPB bound (Anstreicher-Brixius), Frank-Wolfe with exact line search, Hungarian LAP then warm-started Jonker-Volgenant, branching rules 2, 3 and 4 and strategies A to E of Brixius-Anstreicher (OMS 2001), symmetries of the distance matrices (automorphism groups), Knuth estimator, shared-pool parallel mode (threads). |
+| `src/reference/qap_bb_campagne.c` | Code as used for the nug12 to nug24 campaign (2000 algorithm), kept as reference. |
+| `src/test_qap.c`, `tests/` | Tests against brute force (LAP, bound validity, full B&B with and without symmetries) and regression bench (optimum and tree fingerprint). |
 | `scripts/campagne.py` | Campaign runner: job queue, state written every 5 s for the site. |
 | `data/qaplib/` | QAPLIB nug instances and known solutions, copied from [mhahsler/qap](https://github.com/mhahsler/qap). |
 | `results/` | JSON result of every run (command, nodes, time, optimal permutation). |
