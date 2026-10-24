@@ -1,12 +1,12 @@
 {
- "updated": 1792856641.1250453,
+ "updated": 1792857026.1148357,
  "machine": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
   "cores": 4,
   "load": [
-   2.0419921875,
-   2.197265625,
-   2.267578125
+   2.08203125,
+   2.1259765625,
+   2.2021484375
   ],
   "maxj": 2
  },
@@ -752,9 +752,23 @@
    "args": "-strat C -dives 400 -q 1.5 -seed 7 -ub 3597 -nointprune",
    "mode": "estimate",
    "group": "Calibration Knuth",
-   "status": "running",
+   "status": "done",
    "start": 1792856268.0671124,
-   "end": null
+   "end": 1792856933.083467,
+   "result": {
+    "mode": "estimate",
+    "n": 22,
+    "dives": 400,
+    "q": 1.5,
+    "nfw": 150,
+    "ub": 3596,
+    "est_nodes": 2455900.0,
+    "est_nodes_stderr": 1340000.0,
+    "est_time_s": 767.1,
+    "sec_per_node": 0.0003124,
+    "nodes_evaluated": 2501,
+    "wall_s": 663.2
+   }
   },
   {
    "id": "k1_nug24_D",
@@ -768,12 +782,12 @@
    "start": 1792856376.5770032,
    "end": null,
    "progress": {
-    "elapsed_s": 263.8,
-    "dives_done": 106,
+    "elapsed_s": 640.0,
+    "dives_done": 256,
     "dives_total": 400,
-    "nodes": 708,
-    "est_nodes": 13637000.0,
-    "est_time_s": 9907.4,
+    "nodes": 1711,
+    "est_nodes": 9344700.0,
+    "est_time_s": 8360.6,
     "final": 0
    }
   },
@@ -785,7 +799,18 @@
    "args": "-strat D -dives 400 -q 1.5 -seed 7 -ub 3745 -nointprune",
    "mode": "estimate",
    "group": "Calibration Knuth",
-   "status": "pending"
+   "status": "running",
+   "start": 1792856933.653864,
+   "end": null,
+   "progress": {
+    "elapsed_s": 85.9,
+    "dives_done": 51,
+    "dives_total": 400,
+    "nodes": 364,
+    "est_nodes": 10924000.0,
+    "est_time_s": 8789.9,
+    "final": 0
+   }
   },
   {
    "id": "r1_nug22_C",
