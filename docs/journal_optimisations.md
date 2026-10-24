@@ -84,11 +84,13 @@ Méthode : on part du code actuel et on désactive les modifications une à une,
 | A6 Frank-Wolfe fusionné | 1,26 | 1,30 | 1,12 | 0,99 | 1,16 | 1,16 | 1,16 |
 | B1 Mise à jour S, T et itérations × 0,7 | 1,09 | 1,09 | 1,20 | 1,26 | 1,20 | 1,06 | 1,20 |
 | B2 Abandon des candidates | 1,39 | 1,44 | 1,96 | 1,49 | 1,78 | 1,16 | 1,13 |
-| **Total face au code de 2000** | **7,22** | **6,85** | **9,91** | **6,84** | **8,33** | **3,71** | **4,31** |
+| B3 Enfants au point du père (mesuré à part) | 1,00 | 1,07 | 1,08 | 1,17 | 1,09 | 1,21 | 1,29 |
+| **Total face au code de 2000 (sans B3)** | **7,22** | **6,85** | **9,91** | **6,84** | **8,33** | **3,71** | **4,31** |
+| **Total avec B3** | **7,2** | **7,3** | **10,7** | **8,0** | **9,1** | **4,5** | **5,6** |
 | Temps 2000 → 2026 (s) | 7,15 → 0,99 | 4,25 → 0,62 | 18,8 → 1,90 | 5,40 → 0,79 | 59,1 → 7,09 | 285 → 76,9 | 691 → 160 |
 
-Lecture :
-- Les modifications qui accélèrent chaque nœud (A1, A4, A5, A6, B1) gardent leur gain quand la taille croît ; A5 augmente même (× 1,3 à × 1,75), car la part du LAP croît avec m.
+Lecture (tendance : croît pour A5 et B3, stable pour A1, A4, A6, B1, décroît pour A2, A3, B2) :
+- Les modifications qui accélèrent chaque nœud (A1, A4, A5, A6, B1, B3) gardent leur gain quand la taille croît ; A5 augmente même (× 1,3 à × 1,75), car la part du LAP croît avec m.
 - Les modifications qui portent sur l'anticipation (A2 en partie, A3, B2) perdent de leur effet : leur gain suit la part de l'anticipation dans le temps total (80 % sur nug17, 20 % sur nug22 en stratégie C).
 - Stratégie D sur nug20 : code de 2000 717,7 s, code actuel 89,5 s (× 8,0), dont B2 × 1,98 ; la stratégie C reste plus rapide en temps absolu (76,9 s).
 - Nombre de nœuds, code actuel / code de 2000 : nug14 0,75 ; nug15 0,92 ; nug16a 0,96 ; nug16b 0,99 ; nug17 1,02 ; nug20 1,08 ; nug22 0,94.
