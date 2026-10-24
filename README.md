@@ -25,7 +25,8 @@ Le site du laboratoire (bilingue, suivi des calculs) est dans `docs/index.html` 
 ### Compiler et lancer
 
 ```sh
-cd src && make            # gcc, LAPACK, BLAS
+cd src && make            # gcc, LAPACK, BLAS (Debian/Ubuntu : liblapack-dev, libblas-dev)
+# sans les paquets -dev : make LIBS="-l:liblapack.so.3 -l:libblas.so.3 -lm -lpthread"
 ./qap_bb solve ../data/qaplib/nug20.dat -strat C -ub 2571 -nointprune
 ./qap_bb estimate ../data/qaplib/nug25.dat -strat D -dives 400 -q 1.5
 ./qap_bb par ../data/qaplib/nug17.dat -strat C -threads 4
