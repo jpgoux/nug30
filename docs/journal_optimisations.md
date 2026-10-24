@@ -61,6 +61,29 @@ Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nom
 ### Mesure directe face au code de 2000 (24 octobre, 19 h 30 UTC)
 Même machine, même charge, stratégie C, borne supérieure optimum + 1 : nug20 285,8 s → 75,3 s (× 3,80) ; nug22 691,5 s → 155,0 s (× 4,46).
 
+## Gain de chaque modification selon la taille (24 octobre, 20 h UTC)
+
+Méthode : on part du code actuel et on désactive les modifications une à une, dans l'ordre inverse de leur introduction, sur chaque instance (stratégie C, un cœur, borne opt + 1, quatre calculs à la fois sur la machine pour toutes les mesures). La ligne « reste » est le rapport entre le code de 2000 et le code actuel une fois tout ce qui peut l'être désactivé ; elle regroupe la réduction de lignes sans branchement et l'espace de travail persistant de l'anticipation.
+
+| Modification | nug14 | nug15 | nug16a | nug16b | nug17 | nug20 | nug22 |
+|---|---|---|---|---|---|---|---|
+| A1 Options du compilateur | 1,06 | 1,06 | 1,06 | 1,14 | 1,05 | 1,05 | 1,03 |
+| A2 Cache des valeurs propres, A·P·B incrémental | 1,45 | 1,34 | 1,33 | 1,31 | 1,34 | 1,25 | 1,20 |
+| A3 Un seul calcul par enfant | 1,57 | 1,58 | 1,51 | 1,45 | 1,40 | 1,16 | 1,07 |
+| A4 + A5 (reste) | 1,18 | 1,22 | 1,23 | 1,15 | 1,25 | 1,22 | 1,18 |
+| A5 LAP par plus courts chemins | 1,32 | 1,22 | 1,43 | 1,46 | 1,36 | 1,41 | 1,75 |
+| A6 Frank-Wolfe fusionné | 1,26 | 1,30 | 1,12 | 0,99 | 1,16 | 1,16 | 1,16 |
+| B1 Mise à jour S, T et itérations × 0,7 | 1,09 | 1,09 | 1,20 | 1,26 | 1,20 | 1,06 | 1,20 |
+| B2 Abandon des candidates | 1,39 | 1,44 | 1,96 | 1,49 | 1,78 | 1,16 | 1,13 |
+| **Total face au code de 2000** | **7,22** | **6,85** | **9,91** | **6,84** | **8,33** | **3,71** | **4,31** |
+| Temps 2000 → 2026 (s) | 7,15 → 0,99 | 4,25 → 0,62 | 18,8 → 1,90 | 5,40 → 0,79 | 59,1 → 7,09 | 285 → 76,9 | 691 → 160 |
+
+Lecture :
+- Les modifications qui accélèrent chaque nœud (A1, A4, A5, A6, B1) gardent leur gain quand la taille croît ; A5 augmente même (× 1,3 à × 1,75), car la part du LAP croît avec m.
+- Les modifications qui portent sur l'anticipation (A2 en partie, A3, B2) perdent de leur effet : leur gain suit la part de l'anticipation dans le temps total (80 % sur nug17, 20 % sur nug22 en stratégie C).
+- Stratégie D sur nug20 : code de 2000 717,7 s, code actuel 89,5 s (× 8,0), dont B2 × 1,98 ; la stratégie C reste plus rapide en temps absolu (76,9 s).
+- Nombre de nœuds, code actuel / code de 2000 : nug14 0,75 ; nug15 0,92 ; nug16a 0,96 ; nug16b 0,99 ; nug17 1,02 ; nug20 1,08 ; nug22 0,94.
+
 ## Essais sans gain
 
 | Essai | Idée | Résultat |
@@ -72,6 +95,7 @@ Même machine, même charge, stratégie C, borne supérieure optimum + 1 : nug20
 | Point de départ hérité du père pour les enfants de l'anticipation | X enfant = X père privé de la ligne a et de la colonne b, plus le terme de rang un X[:, b] X[a, :] / (1 − X[a][b]), qui rend la matrice exactement doublement stochastique | borne de chaque enfant +2 à +5 après 50 itérations (encore 10 sous la valeur convergée) ; arbre inchangé à 1 % près |
 | Frank-Wolfe par paires (Lacoste-Julien et Jaggi) | X tenu comme combinaison convexe d'atomes ; on déplace du poids de l'atome de plus grand ⟨G, A⟩ vers la permutation du LAP | racine de nug30 après 50 itérations : 5 318 au lieu de 5 295 ; sur l'arbre, nug22 −10 % de nœuds mais temps × 1,03 seulement, et moins bon que FW classique quand on réduit les itérations |
 | Anticipation décidée par la taille du sous-problème | règle 3 sous le niveau 3 tant que m ≥ k (k = 10 à 14, 1 à 5 candidates, 5 à 18 itérations) | nœuds divisés par 2 à 4 (nug17 60 174 → 14 755), mais temps plus long : nug17 6,8 s → 7,8 s au mieux, nug20 75 s → 100 s |
+| LAP groupés dans un cœur | 4 LAP de même taille en parallèle, un par case d'un registre AVX2 (4 doubles) ; recherche du minimum sans réduction horizontale, mais la relaxation lit une ligne différente par case (lecture dispersée, gather) | micro-banc sur coûts aléatoires, temps par LAP : m = 10 × 1,25 ; m = 14 × 1,09 ; m = 18 × 0,94 ; m = 24 × 0,63 ; m = 29 × 0,74. Perdant aux tailles des nœuds de nug30 (m ≥ 18), non intégré |
 | Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
 
 ## Vitesse d'un cœur de 2026 face à la HP C3000
