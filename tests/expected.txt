@@ -1,7 +1,7 @@
-# instance optimum found nodes fw_iters (code optimise, LAP par plus courts chemins, mise a jour S T, iterations x0,7, strategie C, ub = opt+1)
-nug12 578 578 232 76237
-nug14 1014 1014 2770 684051
-nug15 1150 1150 2667 366838
-nug16a 1610 1610 12677 1446984
-nug16b 1240 1240 4742 473811
-nug17 1732 1732 62685 4308572
+# instance optimum found nodes fw_iters (code optimise, LAP par plus courts chemins, mise a jour S T, iterations x0,7, abandon des candidates dans l'anticipation, strategie C, ub = opt+1)
+nug12 578 578 137 46904
+nug14 1014 1014 1783 443245
+nug15 1150 1150 2249 223180
+nug16a 1610 1610 11308 736861
+nug16b 1240 1240 4290 286955
+nug17 1732 1732 60174 2444787

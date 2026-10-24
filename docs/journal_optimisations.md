@@ -50,6 +50,17 @@ Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nom
 - Racine de nug30, 150 itérations : z passe de 5 325,7 à 5 349,3 ; à convergence, 5 341 sans mise à jour contre 5 363,9 avec, proche de la valeur de 2001 (écart à l'optimum 12,4 %, soit 5 365).
 - Les limites NFW1, NFW2, NFW3 de 2001 ont été fixées pour des machines environ 25 fois plus lentes. Multipliées par 0,7 : plus de nœuds (+6 à +9 % sur le banc), mais moins chers.
 
+### B2. Anticipation : abandon des candidates sans espoir (banc × 1,65 ; nug20 × 1,15 ; nug22 × 1,09)
+- Mesure préalable (chronomètre autour de la boucle d'anticipation) : l'anticipation prend 85 % du temps sur nug16a, 78 % sur nug17, mais 30 % sur nug20 et 20 % sur nug22. La stratégie C ne l'applique qu'aux niveaux 0 à 3 comptés depuis la racine ; les grands arbres ont l'essentiel de leurs nœuds plus bas.
+- Règle 3 de 2001 : pour chaque ligne ou colonne candidate, on calcule la borne z_ab de chacun de ses enfants (quelques itérations de FW) et on garde la candidate de plus grande somme Σ z_ab.
+- Modification : un enfant dont la borne dépasse le seuil d'élagage θ est éliminé quelle que soit sa valeur exacte ; on remplace donc z_ab par min(z_ab, θ) dans la somme. Chaque terme restant est alors au plus θ : si la somme partielle plus θ fois le nombre d'enfants restants ne dépasse pas la meilleure somme connue, la candidate ne peut plus gagner et on l'abandonne. Les enfants sont parcourus par U croissant (les plus prometteurs d'abord) pour que la somme partielle reste basse tôt.
+- Validité : seule la règle de choix de la ligne de branchement change ; toute règle de choix donne un arbre correct, les bornes des enfants restent celles de FW.
+- Effet : la troncature favorise les candidates qui éliminent le plus d'enfants plutôt que celles dont les bornes dépassent de beaucoup le seuil, ce qui réduit aussi le nombre de nœuds (nug14 −36 %, nug17 −4 %, nug20 −0,9 %). Gains par instance du banc : 1,53 / 1,69 / 1,42 / 1,52 / 1,77.
+- Leçon : le banc de petites instances surestime les gains de l'anticipation. Chaque gain doit désormais être mesuré aussi sur nug20 et nug22.
+
+### Mesure directe face au code de 2000 (24 octobre, 19 h 30 UTC)
+Même machine, même charge, stratégie C, borne supérieure optimum + 1 : nug20 285,8 s → 75,3 s (× 3,80) ; nug22 691,5 s → 155,0 s (× 4,46).
+
 ## Essais sans gain
 
 | Essai | Idée | Résultat |
@@ -60,6 +71,7 @@ Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nom
 | Départ JV au lieu du hongrois, garder l'affectation précédente dans le LAP | | plus lent (11 lignes libres au lieu de 5) |
 | Point de départ hérité du père pour les enfants de l'anticipation | X enfant = X père privé de la ligne a et de la colonne b, plus le terme de rang un X[:, b] X[a, :] / (1 − X[a][b]), qui rend la matrice exactement doublement stochastique | borne de chaque enfant +2 à +5 après 50 itérations (encore 10 sous la valeur convergée) ; arbre inchangé à 1 % près |
 | Frank-Wolfe par paires (Lacoste-Julien et Jaggi) | X tenu comme combinaison convexe d'atomes ; on déplace du poids de l'atome de plus grand ⟨G, A⟩ vers la permutation du LAP | racine de nug30 après 50 itérations : 5 318 au lieu de 5 295 ; sur l'arbre, nug22 −10 % de nœuds mais temps × 1,03 seulement, et moins bon que FW classique quand on réduit les itérations |
+| Anticipation décidée par la taille du sous-problème | règle 3 sous le niveau 3 tant que m ≥ k (k = 10 à 14, 1 à 5 candidates, 5 à 18 itérations) | nœuds divisés par 2 à 4 (nug17 60 174 → 14 755), mais temps plus long : nug17 6,8 s → 7,8 s au mieux, nug20 75 s → 100 s |
 | Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
 
 ## Vitesse d'un cœur de 2026 face à la HP C3000
@@ -72,6 +84,6 @@ Même code (celui de 2000), même instance, un cœur. Temps de l'article : OMS 2
 | nug20 (C) | 8,4 | 0,31 | × 26,7 |
 | nug21 (C) | 7,5 | 0,35 | × 21,3 |
 | nug22 (C) | 6,6 | 0,34 | × 19,4 |
-| nug24 (D) | 11,0 | 0,40 | × 27,4 (calcul en cours) |
+| nug24 (D) | 11,0 | 0,48 | × 23,0 (23,2 M nœuds en 3 h 05, optimum 3 488) |
 
 nug30 a demandé 6,94 années de HP C3000, soit 94 à 127 jours sur un cœur de 2026, 24 à 32 jours sur 4 cœurs. Objectif retenu : × 30 par le code et l'algorithme.

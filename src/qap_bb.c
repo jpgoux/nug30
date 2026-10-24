@@ -454,6 +454,8 @@ static int opt_pfw = 0;
  * x_col = X[.][b], x_row = X[a][.], s = 1 - X[a][b]. Row p then sums to
  * (1 - X[p][b]) + X[p][b] (1 - X[a][b]) / s = 1, and likewise for columns: the
  * point is doubly stochastic, so the Frank-Wolfe bounds stay valid. */
+static int opt_lasize = 0, opt_lanb = 5, opt_lanfw = 18;   /* rule 3 below the strategy's levels while m >= opt_lasize */
+static int opt_lacap = 1;   /* look-ahead: child bounds capped at the threshold, hopeless candidates abandoned */
 static int opt_warm = 0;   /* 1: look-ahead children start from the parent's point */
 static void inherit_x(work_t *dst, const double X[NMAX][NMAX], int m, int a, int b) {
     double sden = 1 - X[a][b];
@@ -1013,6 +1015,10 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
     /* Rules 3 and 4 (Brixius-Anstreicher 2001): prospective bounds on the
      * NBEST rows and NBEST columns with the largest sums of U (Rule 1 order). */
     const rule_t *R = rule_at(nd->depth);
+    rule_t Rsz;
+    if (R->rule == 2 && opt_lasize && m >= opt_lasize) {   /* look-ahead decided by the size of the subproblem */
+        Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_lanb; Rsz.nfw3 = opt_lanfw; R = &Rsz;
+    }
     double zpro[NMAX]; int have_pro = 0;
     if ((R->rule == 3 || R->rule == 4) && m > 2) {
         typedef struct { int kind, line; double s; } cand_t;
@@ -1035,12 +1041,30 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         static __thread double memo_z[NMAX][NMAX], memo_v[NMAX][NMAX];
         static __thread unsigned char memo_ok[NMAX][NMAX];
         memset(memo_ok, 0, sizeof memo_ok);
+        int capped = opt_lacap && R->rule == 3;
         for (int c = 0; c < nc; c++) {
             double score = 0;
+            int ord[NMAX], nrem = 0;
             for (int o = 0; o < m; o++) {
                 int a = cands[c].kind == 0 ? cands[c].line : o, b = cands[c].kind == 0 ? o : cands[c].line;
                 zline[o] = INFINITY;
                 if (cands[c].kind == 0 ? !repCol[b] : !repRow[a]) continue;
+                ord[nrem++] = o;
+            }
+            if (capped) for (int x = 1; x < nrem; x++) {   /* most promising children first: smallest U */
+                int o = ord[x], y = x; double key = cands[c].kind == 0 ? Ueff[cands[c].line][o] : Ueff[o][cands[c].line];
+                while (y > 0) { int o2 = ord[y - 1]; double k2 = cands[c].kind == 0 ? Ueff[cands[c].line][o2] : Ueff[o2][cands[c].line];
+                    if (k2 <= key) break; ord[y] = o2; y--; }
+                ord[y] = o;
+            }
+            int aborted = 0;
+            for (int x = 0; x < nrem; x++) {
+                int o = ord[x];
+                int a = cands[c].kind == 0 ? cands[c].line : o, b = cands[c].kind == 0 ? o : cands[c].line;
+                /* capped score: a child above the threshold counts thr, whatever its bound;
+                 * the remaining children add at most thr each, so a candidate that cannot
+                 * beat the best one is abandoned */
+                if (capped && score + (nrem - x) * thr <= bestscore) { aborted = 1; break; }
                 double zij, vij = 0;
                 if (z + Ueff[a][b] > thr) zij = z + Ueff[a][b];      /* eliminated child: bound from U */
                 else if (opt_memo && memo_ok[a][b]) { zij = memo_z[a][b]; vij = memo_v[a][b]; }
@@ -1058,8 +1082,9 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                     memo_z[a][b] = zij; memo_v[a][b] = vij; memo_ok[a][b] = 1;
                 }
                 zline[o] = zij;
-                score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, 1e15);
+                score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, capped ? thr : 1e15);
             }
+            if (aborted) continue;
             if (score > bestscore) { bestscore = score; bk = cands[c].kind; bl = cands[c].line; memcpy(zpro, zline, sizeof(double) * m); have_pro = 1; }
         }
         w->nlap += w2->nlap; w->nfw += w2->nfw;
@@ -1365,6 +1390,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-updstop")) opt_updstop = 1;
         else if (!strcmp(argv[a], "-nfwx")) opt_nfwx = atof(argv[++a]);
         else if (!strcmp(argv[a], "-warm")) opt_warm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-lacap")) opt_lacap = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-lasize")) opt_lasize = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-lanb")) opt_lanb = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-lanfw")) opt_lanfw = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-pfw")) opt_pfw = 1;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
