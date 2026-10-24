@@ -1,0 +1,77 @@
+# Journal des optimisations (nug30 Laboratory)
+
+Ce journal garde, pour chaque modification du code de 2000 reproduit, le principe mathématique, la raison pour laquelle la borne reste valide, et la mesure. Il servira de base à un article. Les essais sans gain y figurent aussi.
+
+**Mesure.** Banc de cinq instances (nug14, nug15, nug16a, nug16b, nug17), stratégie C, borne supérieure fixée à l'optimum plus un (`-ub opt+1 -nointprune`), un cœur Xeon 2,1 GHz, meilleur de deux exécutions sauf mention contraire. Gain = somme des temps avant / après ; on donne aussi les gains par instance et leur moyenne géométrique. Les modifications de l'algorithme sont aussi mesurées sur nug20 et nug22. Chaque modification passe `make test` : comparaison à la force brute (LAP, validité de la borne, séparation et évaluation complète), non-régression, reprise après checkpoint.
+
+**Notations.** Au nœud courant, m usines libres, matrices réduites Ar, Br (m × m), terme linéaire Cr, constante K. V est une base orthonormée de l'orthogonal de e. La borne QPB (Anstreicher et Brixius, 2001) minimise sur les matrices doublement stochastiques X
+
+f(X) = ⟨X, Ar X Br⟩ − ⟨X, S X⟩ − ⟨X, X T⟩ + ⟨Cr, X⟩ + tr S + tr T,
+
+avec S = V Ŝ Vᵀ, T = V T̂ Vᵀ. Frank-Wolfe (FW) donne à chaque itération k la borne z_k = f(X_k) − ⟨G_k, X_k⟩ + LAP(G_k) + K, où G_k = 2 M(X_k) + Cr et M(X) = Ar X Br − S X − X T.
+
+## Chantier A : implémentation
+
+### A1. Options du compilateur (× 1,07, même arbre)
+`-funroll-loops -fno-math-errno -fno-trapping-math`. Aucune opération n'est réordonnée de façon non associative, donc les résultats sont identiques au bit près.
+
+### A2. Cache des décompositions spectrales, A·P·B incrémental (× 1,27, arbre à ±2 %)
+- Ŝ et T̂ dépendent seulement des valeurs et vecteurs propres de Vᵀ Ar V et Vᵀ Br V, donc de l'ensemble des lignes libres (resp. colonnes libres). Les frères d'un nœud et les candidats de l'anticipation partagent ces ensembles : les décompositions sont mises en cache par masque de bits.
+- Ar P Br pour une permutation P : quand la permutation de l'itération k diffère de la précédente en d positions k₁, …, k_d, on a (Ar P Br) = (Ar P' Br) + Σ_t Ar[:, k_t] (Br[p(k_t)] − Br[p'(k_t)]), soit d mises à jour de rang un en O(m²) chacune au lieu d'un produit en O(m³).
+- Point de départ X₀ = eeᵀ/m : Ar X₀ Br = (Ar e)(eᵀ Br)/m, et S e = 0, eᵀ T = 0, donc M(X₀) se calcule en O(m²).
+- L'ordre des sommes change, donc les arrondis : nug17 passe de 58 918 à 58 818 nœuds.
+
+### A3. Un seul calcul par enfant dans l'anticipation (× 1,56, même arbre)
+Avec les règles 3 et 4, l'enfant (i → j) figure dans la liste de la ligne i et dans celle de la colonne j. Le code de 2000 calculait deux fois sa borne prospective. Le calcul est déterministe (même nœud, mêmes données, même point de départ). S'il a lieu une seconde fois après une baisse de la borne supérieure, il pourrait seulement s'arrêter plus tôt ; la valeur gardée reste une borne valide, car chaque itération de FW en fournit une. Même nombre de nœuds avec et sans, sur les six instances du banc.
+
+### A4. Réduction de lignes du LAP sans branchement (× 1,19, même arbre)
+Profil en temps réel (rdtsc) : le LAP de Jonker-Volgenant prend 63 % du temps, dont 47 % dans la réduction de lignes (plus petit et deuxième plus petit coût réduit d'une ligne). Réécrite avec des sélections sans branchement, elle donne le même résultat au bit près.
+
+### A5. LAP par plus courts chemins, espace de travail persistant (× 1,35, arbre à +0,2 %)
+- La réduction de lignes faisait en moyenne 57 réaffectations par appel pour libérer environ 5 lignes. Remplacement : affectation gloutonne de chaque ligne à sa colonne de plus petit coût réduit, puis un plus court chemin augmentant (Dijkstra sur tableau, O(m²)) par ligne libre, avec mise à jour des duales v_j ← v_j + d_j − d_min sur les colonnes atteintes. Boucles sans branchement, vectorisées par le compilateur.
+- Pourquoi l'arbre change : la valeur optimale du LAP est unique, mais pas les duales optimales (u, v). Or U = G − u − v sert au choix de la ligne ou colonne de branchement et à la borne des enfants. Des duales différentes, toutes optimales, donnent d'autres décisions. Nœuds : nug14 +6,2 %, nug15 −0,3 %, nug16a −0,3 %, nug16b −1,5 %, nug17 +0,25 %.
+- L'anticipation réallouait 8,6 Mo (toutes les matrices de FW de taille 32 × 32) à chaque branchement ; l'espace est désormais gardé par fil.
+
+### A6. Frank-Wolfe en moins de passages (× 1,17, même arbre)
+Chaque itération parcourait huit fois des matrices m × m. Identités utilisées :
+- f = ⟨M X, X⟩ + ⟨Cr, X⟩ + tr S + tr T, donc ⟨G, X⟩ = 2⟨MX, X⟩ + ⟨Cr, X⟩ = 2(f − tr S − tr T − s₂) + s₂ avec s₂ = ⟨Cr, X⟩ ;
+- s₂ se met à jour en O(m) : s₂ ← (1 − α) s₂ + α Σ_i Cr[i][p(i)] ;
+- le pas de ligne q = ⟨P − X, M P − M X⟩ = Σ_i (MP − MX)[i][p(i)] − ⟨X, MP⟩ + ⟨X, MX⟩, où ⟨X, MP⟩ est accumulé pendant le calcul de MP ;
+- G suivant = 2 MX + Cr est écrit pendant la mise à jour de X et MX ;
+- duales du LAP : u_i = c_{i,σ(i)} − v_{σ(i)} (écarts complémentaires) au lieu d'un minimum par ligne.
+Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nombre de nœuds identique.
+
+## Chantier B : algorithme
+
+### B1. Mise à jour de S et T, et itérations de FW × 0,7 (banc × 1,19 ; nug20 × 1,11 ; nug22 × 1,20)
+- Brixius et Anstreicher (OMS 2001) mettent à jour S et T toutes les 30 itérations (paramètre UPDATE) ; notre reproduction ne le faisait pas.
+- Validité pour tout couple (s, t) avec s_i + t_j ≤ λ_i μ_j (λ, μ valeurs propres de Vᵀ Ar V et Vᵀ Br V, Ŝ = W_A diag(s) W_Aᵀ, T̂ = W_B diag(t) W_Bᵀ) : la forme quadratique est convexe sur l'enveloppe affine des matrices doublement stochastiques, et pour une permutation P, ⟨P, SP⟩ = tr S et ⟨P, PT⟩ = tr T, donc f(P) est exactement le coût de P. Le minimum de f sur le polytope minore donc l'optimum.
+- Choix de (s, t) au point X courant : f = ⟨X, Ar X Br⟩ + ⟨Cr, X⟩ + Σ_l s_l α_l + Σ_l t_l β_l avec α_l = 1 − ‖Xᵀ V w_l‖², β_l = 1 − ‖X V w'_l‖². On a Σ α_l = Σ β_l = m − ‖X‖². Maximiser sur l'ensemble réalisable est le dual d'un problème de transport de coûts λ_i μ_j et de marges α, β. Avec λ croissant et μ décroissant, ces coûts vérifient la propriété de Monge ((λ_k − λ_i)(μ_l − μ_j) ≤ 0 pour i < k, j < l) : la règle du coin nord-ouest est optimale, et sa base en escalier donne les duales. Coût O(m³) pour les produits Xᵀ V W, appelé toutes les 30 itérations ; on vérifie la réalisabilité et on n'accepte que si f augmente.
+- Racine de nug30, 150 itérations : z passe de 5 325,7 à 5 349,3 ; à convergence, 5 341 sans mise à jour contre 5 363,9 avec, proche de la valeur de 2001 (écart à l'optimum 12,4 %, soit 5 365).
+- Les limites NFW1, NFW2, NFW3 de 2001 ont été fixées pour des machines environ 25 fois plus lentes. Multipliées par 0,7 : plus de nœuds (+6 à +9 % sur le banc), mais moins chers.
+
+## Essais sans gain
+
+| Essai | Idée | Résultat |
+|---|---|---|
+| Même boucle LAP en AVX-512 | registres de 8 doubles | plus lent (9,0 s contre 8,6 s sur nug16a) |
+| Compilation guidée par profil, clang | | plus lent |
+| LAP en simple précision | 16 valeurs par registre ; duales recalculées en double, u_i = min_j (c_ij − v_j), pour garder (u, v) réalisable | 8 % plus lent : conversion et passage final coûtent plus que le gain sur m ≤ 17 |
+| Départ JV au lieu du hongrois, garder l'affectation précédente dans le LAP | | plus lent (11 lignes libres au lieu de 5) |
+| Point de départ hérité du père pour les enfants de l'anticipation | X enfant = X père privé de la ligne a et de la colonne b, plus le terme de rang un X[:, b] X[a, :] / (1 − X[a][b]), qui rend la matrice exactement doublement stochastique | borne de chaque enfant +2 à +5 après 50 itérations (encore 10 sous la valeur convergée) ; arbre inchangé à 1 % près |
+| Frank-Wolfe par paires (Lacoste-Julien et Jaggi) | X tenu comme combinaison convexe d'atomes ; on déplace du poids de l'atome de plus grand ⟨G, A⟩ vers la permutation du LAP | racine de nug30 après 50 itérations : 5 318 au lieu de 5 295 ; sur l'arbre, nug22 −10 % de nœuds mais temps × 1,03 seulement, et moins bon que FW classique quand on réduit les itérations |
+| Plafond de convergence | FW avec 2 et 4 fois plus d'itérations | nug20 : −10 % et −13 % de nœuds, temps + 44 % et + 120 % |
+
+## Vitesse d'un cœur de 2026 face à la HP C3000
+
+Même code (celui de 2000), même instance, un cœur. Temps de l'article : OMS 2001, HP C3000.
+
+| Instance | ms par nœud (2000) | ms par nœud (2026) | Rapport |
+|---|---|---|---|
+| nug18 (C) | 16,5 | 0,77 | × 21,6 |
+| nug20 (C) | 8,4 | 0,31 | × 26,7 |
+| nug21 (C) | 7,5 | 0,35 | × 21,3 |
+| nug22 (C) | 6,6 | 0,34 | × 19,4 |
+| nug24 (D) | 11,0 | 0,40 | × 27,4 (calcul en cours) |
+
+nug30 a demandé 6,94 années de HP C3000, soit 94 à 127 jours sur un cœur de 2026, 24 à 32 jours sur 4 cœurs. Objectif retenu : × 30 par le code et l'algorithme.

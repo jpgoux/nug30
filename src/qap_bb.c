@@ -42,15 +42,27 @@ static int opt_intprune = 1;   /* integer data: prune if bound > ub - 1 (else bo
 /* branching strategy by depth (Brixius-Anstreicher 2001, Tables 1-2) */
 typedef struct { int maxdepth, rule, nfw1, nfw2, nfw3, nbest; } rule_t;
 static rule_t strat[8]; static int nstrat = 0;
+/* Scale of the Frank-Wolfe iteration limits NFW1, NFW2, NFW3 of the 2001 tables.
+ * Those limits were set for machines about 25 times slower; with the S, T update
+ * a factor 0.7 is faster on nug20 and nug22 (more nodes, cheaper nodes). */
+static double opt_nfwx = 0.7;
+static void scale_strategy(void) {
+    if (opt_nfwx == 1) return;
+    for (int k = 0; k < nstrat; k++) {
+        strat[k].nfw1 = (int)(strat[k].nfw1 * opt_nfwx + 0.5); strat[k].nfw2 = (int)(strat[k].nfw2 * opt_nfwx + 0.5);
+        strat[k].nfw3 = (int)(strat[k].nfw3 * opt_nfwx + 0.5);
+    }
+}
 static void set_strategy(char s) {
     nstrat = 0;
     int c4 = -1, c3 = -1;
     if (s == 'B') { c4 = 1; c3 = 2; } else if (s == 'C') { c4 = 1; c3 = 3; } else if (s == 'D') { c4 = 2; c3 = 4; }
     else if (s == 'E') { c4 = 3; c3 = 5; }
-    if (s == 'A') { strat[nstrat++] = (rule_t){NMAX, 2, 150, 100, 0, 0}; return; }
+    if (s == 'A') { strat[nstrat++] = (rule_t){NMAX, 2, 150, 100, 0, 0}; scale_strategy(); return; }
     strat[nstrat++] = (rule_t){c4, 4, 150, 100, 50, 20};
     strat[nstrat++] = (rule_t){c3, 3, 100, 100, 25, 10};
     strat[nstrat++] = (rule_t){NMAX, 2, 75, 50, 0, 0};
+    scale_strategy();
 }
 static const rule_t *rule_at(int depth) {
     for (int k = 0; k < nstrat; k++) if (depth <= strat[k].maxdepth) return &strat[k];
@@ -345,6 +357,55 @@ static double lap_sp(int dim, const double c[NMAX][NMAX], int *rowsol, double *u
     return tot;
 }
 
+/* lap_sp in single precision: twice as many values per vector instruction.
+ * Only the assignment and the column duals v come from the float search; the
+ * row duals are then recomputed in double as u_i = min_j (c_ij - v_j), so
+ * (u, v) is dual feasible in double and sum u + sum v stays a valid lower bound. */
+static double lap_spf(int dim, const double c[NMAX][NMAX], int *rowsol, double *u, double *v) {
+    float cf[NMAX][NMAX] __attribute__((aligned(64)));
+    float vf[NMAX] __attribute__((aligned(64)));
+    int colsol[NMAX], freer[NMAX], pred[NMAX], scan[NMAX], nfree = 0;
+    float d[NMAX] __attribute__((aligned(64)));
+    float done[NMAX] __attribute__((aligned(64)));
+    for (int i = 0; i < dim; i++) for (int j = 0; j < dim; j++) cf[i][j] = (float)c[i][j];
+    for (int j = 0; j < dim; j++) { vf[j] = (float)v[j]; colsol[j] = -1; }
+    for (int i = 0; i < dim; i++) {
+        float mn = INFINITY; int jm = 0; const float *ci = cf[i];
+        for (int j = 0; j < dim; j++) { float h = ci[j] - vf[j]; int lt = h < mn; mn = lt ? h : mn; jm = lt ? j : jm; }
+        if (colsol[jm] < 0) { colsol[jm] = i; rowsol[i] = jm; } else freer[nfree++] = i;
+    }
+    for (int f = 0; f < nfree; f++) {
+        int fr = freer[f], ns = 0, jend = -1;
+        const float *c0 = cf[fr];
+        for (int j = 0; j < dim; j++) { d[j] = c0[j] - vf[j]; pred[j] = fr; done[j] = 0; }
+        float mn;
+        for (;;) {
+            mn = INFINITY; int js = 0;
+            for (int j = 0; j < dim; j++) { float x = d[j] + done[j]; int lt = x < mn; mn = lt ? x : mn; js = lt ? j : js; }
+            done[js] = INFINITY; scan[ns++] = js;
+            if (colsol[js] < 0) { jend = js; break; }
+            int i = colsol[js]; const float *ci = cf[i];
+            float h = ci[js] - vf[js] - mn;
+            for (int j = 0; j < dim; j++) {
+                float v2 = ci[j] - vf[j] - h;
+                int up = (v2 < d[j]) & (done[j] == 0);
+                d[j] = up ? v2 : d[j]; pred[j] = up ? i : pred[j];
+            }
+        }
+        for (int t = 0; t < ns; t++) { int j = scan[t]; vf[j] += d[j] - mn; }
+        int i, j = jend;
+        do { i = pred[j]; colsol[j] = i; int k = rowsol[i]; rowsol[i] = j; j = k; } while (i != fr);
+    }
+    double tot = 0;
+    for (int j = 0; j < dim; j++) { v[j] = vf[j]; tot += v[j]; }
+    for (int i = 0; i < dim; i++) {
+        double mn = INFINITY; const double *ci = c[i];
+        for (int j = 0; j < dim; j++) { double h = ci[j] - v[j]; mn = h < mn ? h : mn; }
+        u[i] = mn; tot += mn;
+    }
+    return tot;
+}
+
 /* ---------- V matrices: orthonormal basis of e-perp, per size ---------- */
 static double Vb[NMAX + 1][NMAX][NMAX]; /* Vb[m] is m x (m-1) */
 static void init_V(void) {
@@ -373,8 +434,38 @@ typedef struct {
     int pprev[NMAX], apb_ok, apb_age;
     unsigned maskF, maskL;              /* free facilities / locations of the node being evaluated */   /* incremental Ar P Br: permutation behind APB */
     double trST;
-    long nlap, nfw;
+    const eig_t *eA, *eB;               /* spectral data of the node, for the S, T update */
+    double sd[NMAX], td[NMAX];          /* current dual vectors: Sp = VW_A diag(sd) VW_A^T, Tp likewise */
+    long nlap, nfw, nupd;
+    int x0_ok; double X0[NMAX][NMAX];   /* Frank-Wolfe starting point inherited from the parent */
+    struct pfw_s *pa;                   /* active set of the pairwise Frank-Wolfe */
 } work_t;
+
+/* Pairwise Frank-Wolfe (Lacoste-Julien and Jaggi): X is kept as a convex
+ * combination of atoms, the starting point (atom marked perm[.][0] = -1) and the
+ * permutations found by the LAP. Each step moves weight from the atom with the
+ * largest <G, A> (away atom) to the LAP permutation. M(A) is stored per atom. */
+#define AMAX 320
+typedef struct pfw_s { int n; int perm[AMAX][NMAX]; double lam[AMAX], cr[AMAX]; double A0[NMAX][NMAX]; double MA[AMAX][NMAX][NMAX]; } pfw_t;
+static int opt_pfw = 0;
+
+/* Starting point of a child (a -> b) from the parent's Frank-Wolfe point X (m x m):
+ * drop row a and column b, then add the rank-one term x_col x_row / s, with
+ * x_col = X[.][b], x_row = X[a][.], s = 1 - X[a][b]. Row p then sums to
+ * (1 - X[p][b]) + X[p][b] (1 - X[a][b]) / s = 1, and likewise for columns: the
+ * point is doubly stochastic, so the Frank-Wolfe bounds stay valid. */
+static int opt_warm = 0;   /* 1: look-ahead children start from the parent's point */
+static void inherit_x(work_t *dst, const double X[NMAX][NMAX], int m, int a, int b) {
+    double sden = 1 - X[a][b];
+    dst->x0_ok = 0;
+    if (sden < 1e-6) return;
+    int r = 0;
+    for (int p = 0; p < m; p++) { if (p == a) continue;
+        int c = 0; double xp = X[p][b] / sden;
+        for (int q = 0; q < m; q++) { if (q == b) continue; dst->X0[r][c++] = X[p][q] + xp * X[a][q]; }
+        r++; }
+    dst->x0_ok = 1;
+}
 
 /* c = a b for m <= W: rows of NMAX doubles, the j loop has a constant trip
  * count W so it compiles to full-width FMAs; columns j >= m of c hold junk
@@ -459,7 +550,57 @@ static double setup_qpb(work_t *w, int m) {
     build_from_vw(m, ea->VW, s, w->Sp);
     build_from_vw(m, eb->VW, t, w->Tp);
     w->trST = pb;
+    w->eA = ea; w->eB = eb;
+    memcpy(w->sd, s, sizeof(double) * k); memcpy(w->td, t, sizeof(double) * k);
     return pb;
+}
+
+/* Update of S and T at the current point X (UPDATE parameter of Brixius and
+ * Anstreicher). For any (s, t) with s_i + t_j <= lambda_i mu_j, Q is convex on
+ * the affine hull and f(P) = QAP cost on every permutation P, so the bound stays
+ * valid. At fixed X, f = <X, Ar X Br> + <Cr, X> + sum_l s_l alpha_l + sum_l t_l beta_l
+ * with alpha_l = 1 - |X^T VW_A[:,l]|^2, beta_l = 1 - |X VW_B[:,l]|^2, which have
+ * equal sums. The best (s, t) is then the dual of a transportation problem with
+ * costs lambda_i mu_j and margins alpha, beta. These costs are Monge once lambda
+ * is ascending and mu descending, so the north-west corner rule is optimal and
+ * its staircase basis gives the duals. Returns 1 if S, T changed. */
+static int opt_upd = 30, opt_updstop = 0;
+static int update_st(work_t *w, int m) {
+    int k = m - 1; const eig_t *ea = w->eA, *eb = w->eB;
+    double al[NMAX], be[NMAX], s[NMAX], t[NMAX];
+    for (int l = 0; l < k; l++) { al[l] = 1; be[l] = 1; }
+    for (int j = 0; j < m; j++) {       /* (X^T VW_A)[j][l] */
+        double r[NMAX] = {0};
+        for (int i = 0; i < m; i++) { double x = w->X[i][j]; for (int l = 0; l < k; l++) r[l] += x * ea->VW[i][l]; }
+        for (int l = 0; l < k; l++) al[l] -= r[l] * r[l];
+    }
+    for (int i = 0; i < m; i++) {       /* (X VW_B)[i][l] */
+        double r[NMAX] = {0};
+        for (int j = 0; j < m; j++) { double x = w->X[i][j]; for (int l = 0; l < k; l++) r[l] += x * eb->VW[j][l]; }
+        for (int l = 0; l < k; l++) be[l] -= r[l] * r[l];
+    }
+    /* north-west corner: rows lambda ascending (index i), columns mu descending (index k-1-j) */
+    const double *la = ea->lam, *mu = eb->lam;
+    int i = 0, j = 0; double ra = al[0], rb = be[k - 1];
+    s[0] = 0; t[k - 1] = la[0] * mu[k - 1];
+    while (i < k - 1 || j < k - 1) {
+        int down = (j == k - 1) || (i < k - 1 && ra < rb);
+        if (down) { rb -= ra; i++; ra = al[i]; s[i] = la[i] * mu[k - 1 - j] - t[k - 1 - j]; }
+        else      { ra -= rb; j++; rb = be[k - 1 - j]; t[k - 1 - j] = la[i] * mu[k - 1 - j] - s[i]; }
+    }
+    double scale = 1, viol = 0, gain = 0;
+    for (int a = 0; a < k; a++) for (int b = 0; b < k; b++) {
+        double c = la[a] * mu[b]; if (fabs(c) > scale) scale = fabs(c);
+        double x = s[a] + t[b] - c; if (x > viol) viol = x; }
+    if (viol > 1e-9 * scale) return 0;   /* not dual feasible: keep S, T */
+    for (int l = 0; l < k; l++) gain += al[l] * (s[l] - w->sd[l]) + be[l] * (t[l] - w->td[l]);
+    if (gain <= 1e-9 * scale) return 0;
+    memcpy(w->sd, s, sizeof(double) * k); memcpy(w->td, t, sizeof(double) * k);
+    build_from_vw(m, ea->VW, s, w->Sp);
+    build_from_vw(m, eb->VW, t, w->Tp);
+    double tr = 0; for (int l = 0; l < k; l++) tr += s[l] + t[l];
+    w->trST = tr; w->nupd++;
+    return 1;
 }
 
 /* M(X) = Ar X Br - Sp X - X Tp, for general X */
@@ -528,6 +669,11 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     setup_qpb(w, m);
     w->apb_ok = 0;
     double inv = 1.0 / m;
+    if (w->x0_ok) {   /* inherited starting point */
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] = w->X0[i][j];
+        applyM(w, m, w->X, w->MX);
+        w->x0_ok = 0;
+    } else {
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] = inv;
     {   /* X0 = ee^T/m: Ar X0 Br = (Ar e)(e^T Br)/m, and Sp e = 0, e^T Tp = 0 */
         double ra[NMAX], cb[NMAX];
@@ -535,8 +681,15 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         for (int j = 0; j < m; j++) { double t = 0; for (int k = 0; k < m; k++) t += w->Br[k][j]; cb[j] = t; }
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->MX[i][j] = ra[i] * cb[j] * inv;
     }
+    }
     double s2 = dotm(m, w->Cr, w->X);   /* <Cr, X>, kept up to date in O(m) when opt_fuse */
     double f = dotm(m, w->X, w->MX) + s2 + w->trST;
+    pfw_t *PA = NULL;
+    if (opt_pfw) {
+        if (!w->pa) w->pa = calloc(1, sizeof(pfw_t));
+        PA = w->pa; PA->n = 1; PA->perm[0][0] = -1; PA->lam[0] = 1; PA->cr[0] = s2;
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { PA->A0[i][j] = w->X[i][j]; PA->MA[0][i][j] = w->MX[i][j]; }
+    }
     if (opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
     double best = -INFINITY, u[NMAX], v[NMAX];
     int p[NMAX];
@@ -547,9 +700,9 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         if (opt_lap == 0 || (opt_lap == 2 && it == 0)) lapv = lap(m, w->G, p, u, v);
         else if (opt_lap == 3 && it == 0) lapv = lap_jv(m, w->G, p, u, v, 0);   /* JV with its own column reduction */
         else if (opt_lap == 5 && it == 0) lapv = lap(m, w->G, p, u, v);
-        else if (opt_lap == 4 || opt_lap == 5) {
+        else if (opt_lap == 4 || opt_lap == 5 || opt_lap == 6) {
             if (it == 0) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) mn = w->G[i][j] < mn ? w->G[i][j] : mn; v[j] = mn; }
-            lapv = lap_sp(m, w->G, p, u, v, it > 0 && opt_spkeep);
+            lapv = opt_lap == 6 ? lap_spf(m, w->G, p, u, v) : lap_sp(m, w->G, p, u, v, it > 0 && opt_spkeep);
         }
         else {
             if (opt_lap == 1) for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) if (w->G[i][j] < mn) mn = w->G[i][j]; v[j] = mn; }
@@ -577,6 +730,46 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         if (cp < *ub_found) { *ub_found = cp; if (bestp) memcpy(bestp, p, sizeof(int) * m); }
         /* line search on D = P - X */
+        if (PA) {   /* pairwise step */
+            int ai = 0, fi = -1; double ga = -INFINITY;
+            for (int t = 0; t < PA->n; t++) {
+                double g = 0; const int *pt = PA->perm[t];
+                if (pt[0] < 0) g = dotm(m, w->G, PA->A0); else for (int i = 0; i < m; i++) g += w->G[i][pt[i]];
+                if (g > ga) { ga = g; ai = t; }
+                if (pt[0] >= 0 && fi < 0 && !memcmp(pt, p, sizeof(int) * m)) fi = t;
+            }
+            double gd = lapv - ga;
+            if (fi == ai || gd > -1e-9) { it++; break; }
+            const int *pa = PA->perm[ai]; double (*Ma)[NMAX] = PA->MA[ai];
+            double q = 0;
+            for (int i = 0; i < m; i++) q += w->MP[i][p[i]] - Ma[i][p[i]];
+            if (pa[0] < 0) { for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) q -= PA->A0[i][j] * (w->MP[i][j] - Ma[i][j]); }
+            else for (int i = 0; i < m; i++) q -= w->MP[i][pa[i]] - Ma[i][pa[i]];
+            double amax = PA->lam[ai];
+            double alpha = (q > 1e-12) ? -gd / (2 * q) : amax;
+            if (alpha > amax) alpha = amax;
+            if (pa[0] < 0) { for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] -= alpha * PA->A0[i][j]; }
+            else for (int i = 0; i < m; i++) w->X[i][pa[i]] -= alpha;
+            double crp = 0;
+            for (int i = 0; i < m; i++) { w->X[i][p[i]] += alpha; crp += w->Cr[i][p[i]];
+                double *mx = w->MX[i], *g = w->G[i]; const double *mp = w->MP[i], *ma = Ma[i], *cr = w->Cr[i];
+                for (int j = 0; j < m; j++) { double t = mx[j] + alpha * (mp[j] - ma[j]); mx[j] = t; g[j] = 2 * t + cr[j]; } }
+            s2 += alpha * (crp - PA->cr[ai]);
+            f += alpha * gd + alpha * alpha * q;
+            if (fi < 0) {
+                if (PA->n == AMAX) { it++; break; }
+                fi = PA->n++; memcpy(PA->perm[fi], p, sizeof(int) * m); PA->lam[fi] = 0; PA->cr[fi] = crp;
+                for (int i = 0; i < m; i++) memcpy(PA->MA[fi][i], w->MP[i], sizeof(double) * m);
+            }
+            PA->lam[fi] += alpha; PA->lam[ai] -= alpha;
+            if (PA->lam[ai] <= 1e-12) {   /* drop step: remove the away atom */
+                int last = --PA->n;
+                if (ai != last) { memcpy(PA->perm[ai], PA->perm[last], sizeof(int) * NMAX); PA->lam[ai] = PA->lam[last]; PA->cr[ai] = PA->cr[last];
+                    for (int i = 0; i < m; i++) memcpy(PA->MA[ai][i], PA->MA[last][i], sizeof(double) * m); }
+            }
+            if (it + 1 >= nfw2 && f + K < target) { it++; break; }
+            continue;
+        }
         double gd = lapv - gx;            /* <G, P - X> = <G,P> - <G,X>, <G,P> = lap value */
         double q = 0;
         if (opt_fuse) {   /* q = <P - X, MP - MX> = sum_i (MP - MX)[i][p_i] - <X, MP> + <X, MX> */
@@ -603,9 +796,25 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             w->MX[i][j] += alpha * (w->MP[i][j] - w->MX[i][j]);
         }
         f += alpha * gd + alpha * alpha * q;
+        if (opt_upd && (it + 1) % opt_upd == 0 && it + 1 < nfw && update_st(w, m)) {
+            applyM(w, m, w->X, w->MX);
+            s2 = dotm(m, w->Cr, w->X);
+            f = dotm(m, w->X, w->MX) + s2 + w->trST;
+            for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
+        }
         /* termination rule of Brixius-Anstreicher: stop at NFW2 if the QP
          * value f(X_k) is already below the incumbent (cannot fathom) */
-        if (it + 1 >= nfw2 && f + K < target) { it++; break; }
+        if (it + 1 >= nfw2 && f + K < target) {
+            /* before giving up, one S, T update may lift f above the target */
+            if (opt_updstop && update_st(w, m)) {
+                applyM(w, m, w->X, w->MX);
+                s2 = dotm(m, w->Cr, w->X);
+                f = dotm(m, w->X, w->MX) + s2 + w->trST;
+                for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
+                if (f + K >= target) continue;
+            }
+            it++; break;
+        }
     }
     (void)hist_best_at;
     static int trace = -1; if (trace < 0) trace = getenv("QPB_TRACE") != NULL;
@@ -837,7 +1046,9 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 else if (opt_memo && memo_ok[a][b]) { zij = memo_z[a][b]; vij = memo_v[a][b]; }
                 else {
                     node_t chn = *nd; chn.rc[ev->F[a]] = ev->L[b]; chn.cr[ev->L[b]] = ev->F[a]; chn.depth++;
+                    if (opt_warm & 1) inherit_x(w2, w->X, m, a, b);
                     eval_t e2; eval_node(&chn, w2, &e2, R->nfw3, R->nfw3, who);
+                    w2->x0_ok = 0;
                     zij = fmax(e2.z, z + Ueff[a][b]);
                     if (R->rule == 4 && e2.m > 1) {
                         for (int x = 0; x < e2.m; x++) { double rs = 0, cs = 0;
@@ -1150,6 +1361,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nospkeep")) opt_spkeep = 0;
         else if (!strcmp(argv[a], "-nospu")) opt_spu = 0;
         else if (!strcmp(argv[a], "-nofuse")) opt_fuse = 0;
+        else if (!strcmp(argv[a], "-upd")) opt_upd = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-updstop")) opt_updstop = 1;
+        else if (!strcmp(argv[a], "-nfwx")) opt_nfwx = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-warm")) opt_warm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-pfw")) opt_pfw = 1;
         else if (!strcmp(argv[a], "-threads")) opt_threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-seed")) seed = atoll(argv[++a]);
         else if (!strcmp(argv[a], "-sb")) opt_sb = atoi(argv[++a]);

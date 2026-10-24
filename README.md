@@ -37,7 +37,7 @@ Un seul fichier d'environ 1 250 lignes, organisé en couches, de la plus basse �
 
 **2. Borne QPB (`setup_qpb`, `qpb_fw`).** La borne d'Anstreicher et Brixius (2001) est une relaxation quadratique convexe.
 - `setup_qpb` construit les matrices de projection Sp et Tp à partir des valeurs propres de A et B restreintes aux usines et emplacements libres. Les décompositions spectrales sont mises en cache par sous-ensemble, car les frères partagent les mêmes lignes libres (`get_eig`).
-- `qpb_fw` lance Frank-Wolfe depuis X = eeᵀ/m avec recherche linéaire exacte. Chaque itération enchaîne un LAP sur le gradient G, une borne inférieure z, puis le produit A·P·B mis à jour par rangs un quand la permutation change peu (`applyMperm`). Les produits scalaires ⟨G, X⟩ et ⟨C, X⟩ sont tenus à jour en O(m), et le gradient suivant est construit pendant la mise à jour de X.
+- `qpb_fw` lance Frank-Wolfe depuis X = eeᵀ/m avec recherche linéaire exacte. Chaque itération enchaîne un LAP sur le gradient G, une borne inférieure z, puis le produit A·P·B mis à jour par rangs un quand la permutation change peu (`applyMperm`). Les produits scalaires ⟨G, X⟩ et ⟨C, X⟩ sont tenus à jour en O(m), et le gradient suivant est construit pendant la mise à jour de X. Toutes les 30 itérations, S et T sont réajustés au point courant (`update_st`, comme dans l'article de 2001) : le meilleur choix est le dual d'un problème de transport à coûts de Monge, résolu par la règle du coin nord-ouest. Les limites d'itérations de 2001 sont multipliées par 0,7 (`-nfwx`).
 - On s'arrête dès que z dépasse la meilleure solution connue moins un (nœud élagué), ou après le nombre d'itérations fixé par la stratégie.
 - La matrice des coûts réduits U = G − u − v donne, pour chaque affectation (i → j), une borne de l'enfant correspondant.
 
@@ -87,6 +87,8 @@ make test                 # force brute, non-régression, reprise après checkpo
 
 ### Comment on mesure un gain
 
+Le principe mathématique, la preuve de validité et la mesure de chaque optimisation, y compris les essais sans gain, sont dans [`docs/journal_optimisations.md`](docs/journal_optimisations.md).
+
 Chaque modification passe d'abord `make test`. Le gain est mesuré sur cinq instances (nug14, nug15, nug16a, nug16b, nug17), résolues entièrement dans les conditions de l'article, sur un cœur, en gardant le meilleur de deux exécutions. On publie la somme des temps, le gain par instance et leur moyenne géométrique, et l'écart de nombre de nœuds quand l'arbre change. Le tableau à jour est dans l'onglet « De nug25 à nug30 » du site.
 
 ### Références
@@ -131,7 +133,7 @@ A single file of about 1,250 lines, organized in layers, from lowest to highest.
 
 **2. QPB bound (`setup_qpb`, `qpb_fw`).** The Anstreicher-Brixius bound (2001) is a convex quadratic relaxation.
 - `setup_qpb` builds the projection matrices Sp and Tp from the eigenvalues of A and B restricted to the free facilities and locations. Eigen-decompositions are cached per subset, since siblings share the same free rows (`get_eig`).
-- `qpb_fw` runs Frank-Wolfe from X = eeᵀ/m with exact line search. Each iteration chains a LAP on the gradient G, a lower bound z, then the product A·P·B, updated by rank-one terms when the permutation changes little (`applyMperm`). The inner products ⟨G, X⟩ and ⟨C, X⟩ are kept up to date in O(m), and the next gradient is built during the update of X.
+- `qpb_fw` runs Frank-Wolfe from X = eeᵀ/m with exact line search. Each iteration chains a LAP on the gradient G, a lower bound z, then the product A·P·B, updated by rank-one terms when the permutation changes little (`applyMperm`). The inner products ⟨G, X⟩ and ⟨C, X⟩ are kept up to date in O(m), and the next gradient is built during the update of X. Every 30 iterations, S and T are readjusted at the current point (`update_st`, as in the 2001 paper): the best choice is the dual of a transportation problem with Monge costs, solved by the north-west corner rule. The 2001 iteration limits are multiplied by 0.7 (`-nfwx`).
 - It stops as soon as z exceeds the incumbent minus one (node fathomed), or after the number of iterations set by the strategy.
 - The reduced-cost matrix U = G − u − v gives, for each assignment (i → j), a bound on the corresponding child.
 
@@ -180,6 +182,8 @@ make test                 # brute force, regression, checkpoint restart (about 2
 `-ub opt+1 -nointprune` reproduces the paper's conditions: optimality is proved with an upper bound fixed at the optimum plus one.
 
 ### How a gain is measured
+
+The mathematical principle, validity argument and measurement of every optimization, failed attempts included, are in [`docs/journal_optimisations.md`](docs/journal_optimisations.md) (French).
 
 Every change first passes `make test`. The gain is measured on five instances (nug14, nug15, nug16a, nug16b, nug17), fully solved under the paper's conditions, on one core, keeping the best of two runs. We publish the sum of times, the per-instance gain and their geometric mean, and the node-count difference when the tree changes. The current table is in the "From nug25 to nug30" tab of the site.
 
