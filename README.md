@@ -1,4 +1,4 @@
-# NUG30 Laboratory
+# nug30 Laboratory
 
 *Français ci-dessous. English version further down.*
 
