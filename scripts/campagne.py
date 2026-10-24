@@ -84,7 +84,7 @@ def main():
         for job in jobs:
             d = f"{ROOT}/runs/{job['id']}"
             st, meta = job_state(job)
-            row = {k: job.get(k) for k in ("id", "instance", "label", "desc", "args", "mode", "group")}
+            row = {k: job.get(k) for k in ("id", "instance", "label", "desc", "label_en", "desc_en", "args", "mode", "group")}
             row["status"] = st
             if meta:
                 row["start"] = meta.get("start"); row["end"] = meta.get("end")
