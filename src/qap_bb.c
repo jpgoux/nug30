@@ -779,8 +779,58 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
 }
 
 /* ---------- serial DFS ---------- */
+/* ---------- checkpoint of the serial search ----------
+ * The open part of the tree is the node about to be evaluated, the siblings not yet
+ * explored at every level of the current path, and the resume items not yet started.
+ * They are written in the order the search would visit them, so a resumed run
+ * explores the same tree. File: header line, then one node per line:
+ * "k i1 j1 ... ik jk" (assignments row -> column). Rewritten every opt_ckpt_s seconds. */
+static const char *opt_ckpt = NULL, *opt_resume = NULL;
+static double opt_ckpt_s = 600, g_ckpt_last = 0;
+static const child_t *g_chs[NMAX + 1]; static int g_nch[NMAX + 1], g_cidx[NMAX + 1];
+static node_t g_base; static int g_base_depth = 0;
+static node_t *g_rlist = NULL; static int g_rn = 0, g_rnext = 0;
+static long g_nodes_before = 0; static double g_elapsed_before = 0;
+static void ckpt_node(FILE *f, const node_t *base, int bd, int d, const child_t *last) {
+    int k = 0, I[NMAX], J[NMAX];
+    for (int i = 0; i < N; i++) if (base->rc[i] >= 0) { I[k] = i; J[k++] = base->rc[i]; }
+    for (int e = bd; e < d; e++) { I[k] = g_chs[e][g_cidx[e]].i; J[k++] = g_chs[e][g_cidx[e]].j; }
+    if (last) { I[k] = last->i; J[k++] = last->j; }
+    fprintf(f, "%d", k); for (int t = 0; t < k; t++) fprintf(f, " %d %d", I[t], J[t]); fputc('\n', f);
+}
+static void write_ckpt(const node_t *nd) {
+    char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", opt_ckpt);
+    FILE *f = fopen(tmp, "w"); if (!f) return;
+    fprintf(f, "nugckpt 1 n %d ub %.0f nodes %ld elapsed %.1f\n", N, (double)g_ub, g_nodes_before + (long)g_nodes_all, g_elapsed_before + now() - g_t0);
+    ckpt_node(f, nd, 0, 0, NULL);                       /* the node about to be evaluated */
+    for (int d = nd->depth - 1; d >= g_base_depth; d--)  /* unexplored siblings, deepest level first */
+        for (int c = g_cidx[d] + 1; c < g_nch[d]; c++) ckpt_node(f, &g_base, g_base_depth, d, &g_chs[d][c]);
+    for (int r = g_rnext; r < g_rn; r++) ckpt_node(f, &g_rlist[r], 0, 0, NULL);
+    fclose(f); rename(tmp, opt_ckpt);
+    g_ckpt_last = now();
+}
+static void read_resume(const char *fn) {
+    FILE *f = fopen(fn, "r"); if (!f) { perror(fn); exit(1); }
+    int n; double ub; long nodes; double el;
+    if (fscanf(f, "nugckpt 1 n %d ub %lf nodes %ld elapsed %lf", &n, &ub, &nodes, &el) != 4 || n != N) { fprintf(stderr, "bad checkpoint\n"); exit(1); }
+    if (ub < g_ub) g_ub = ub;
+    g_nodes_before = nodes; g_elapsed_before = el;
+    int cap = 1024; g_rlist = malloc(sizeof(node_t) * cap);
+    int k;
+    while (fscanf(f, "%d", &k) == 1) {
+        if (g_rn == cap) { cap *= 2; g_rlist = realloc(g_rlist, sizeof(node_t) * cap); }
+        node_t *x = &g_rlist[g_rn++];
+        for (int i = 0; i < N; i++) x->rc[i] = x->cr[i] = -1;
+        for (int t = 0; t < k; t++) { int i, j; if (fscanf(f, "%d %d", &i, &j) != 2) exit(5); x->rc[i] = j; x->cr[j] = i; }
+        x->depth = k;
+    }
+    fclose(f);
+    fprintf(stderr, "resume: %d open nodes, %ld nodes already done, ub %.0f\n", g_rn, nodes, ub);
+}
+
 static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     eval_t ev;
+    if (opt_ckpt && now() - g_ckpt_last > opt_ckpt_s) write_ckpt(nd);
     double t = now();
     { const rule_t *R = rule_at(nd->depth); eval_node(nd, w, &ev, R->nfw1, R->nfw2, who); }
     st->t_bound += now() - t;
@@ -792,6 +842,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     int d0 = nd->depth;
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
+        g_chs[d0] = ch; g_nch[d0] = nch; g_cidx[d0] = c;
         g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
         dfs(nd, w, st, who);
@@ -871,13 +922,34 @@ static void pool_push(const node_t *nd, double lb) {
     pool[pool_n].nd = *nd; pool[pool_n].lb = lb; pool_n++;
 }
 
-typedef struct { int id; stats_t st; work_t *w; } wk_t;
+typedef struct { node_t nd; double lb; } sitem_t;
+typedef struct { int id; stats_t st; work_t *w; sitem_t *stack; int sp; pthread_mutex_t mtx; } wk_t;
+static wk_t *g_wk = NULL;
+
+/* checkpoint of the parallel search: pool + every worker's stack. Workers change their
+ * stack under their own mutex (or under pool_lock when taking a task), so holding all
+ * worker mutexes, then pool_lock, gives a consistent snapshot. Order is not preserved. */
+static void write_ckpt_par(void) {
+    for (int k = 0; k < opt_threads; k++) pthread_mutex_lock(&g_wk[k].mtx);
+    pthread_mutex_lock(&pool_lock);
+    char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", opt_ckpt);
+    FILE *f = fopen(tmp, "w");
+    if (f) {
+        fprintf(f, "nugckpt 1 n %d ub %.0f nodes %ld elapsed %.1f\n", N, (double)g_ub, g_nodes_before + (long)g_nodes_all, g_elapsed_before + now() - g_t0);
+        for (int k = 0; k < opt_threads; k++) for (int t = 0; t < g_wk[k].sp; t++) ckpt_node(f, &g_wk[k].stack[t].nd, 0, 0, NULL);
+        for (int t = 0; t < pool_n; t++) ckpt_node(f, &pool[t].nd, 0, 0, NULL);
+        fclose(f); rename(tmp, opt_ckpt);
+    }
+    g_ckpt_last = now();
+    pthread_mutex_unlock(&pool_lock);
+    for (int k = 0; k < opt_threads; k++) pthread_mutex_unlock(&g_wk[k].mtx);
+}
 
 static void *worker(void *arg) {
     wk_t *me = arg;
-    typedef struct { node_t nd; double lb; } sitem_t;
-    sitem_t *stack = malloc(sizeof(sitem_t) * NMAX * NMAX * 2);
+    sitem_t *stack = me->stack;
     for (;;) {
+        if (opt_ckpt && me->id == 0 && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
         pthread_mutex_lock(&pool_lock);
         while (pool_n == 0 && pool_busy > 0) pthread_cond_wait(&pool_cond, &pool_lock);
         if (pool_n == 0 && pool_busy == 0) { pthread_cond_broadcast(&pool_cond); pthread_mutex_unlock(&pool_lock); break; }
@@ -887,11 +959,14 @@ static void *worker(void *arg) {
             if (pool[k].nd.depth > pool[bi].nd.depth || (pool[k].nd.depth == pool[bi].nd.depth && pool[k].lb < pool[bi].lb)) bi = k;
         sitem_t it = {pool[bi].nd, pool[bi].lb}; pool[bi] = pool[--pool_n];
         pool_busy++;
+        int sp = 0; stack[sp++] = it; me->sp = sp;   /* under pool_lock: never lost from a snapshot */
         pthread_mutex_unlock(&pool_lock);
 
-        double tstart = now(); int sp = 0; stack[sp++] = it;
+        double tstart = now();
         long nodes0 = me->st.nodes;
         while (sp > 0) {
+            if (opt_ckpt && me->id == 0 && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
+            pthread_mutex_lock(&me->mtx);
             if (now() - tstart > opt_tmax) {
                 pthread_mutex_lock(&pool_lock);
                 int need = pool_n < 4 * opt_threads;
@@ -906,19 +981,20 @@ static void *worker(void *arg) {
                 tstart = now();
             }
             sitem_t cur = stack[--sp];
-            if (cur.lb > prune_thr(g_ub)) continue;
+            if (cur.lb > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             eval_t ev; double t = now();
             { const rule_t *R = rule_at(cur.nd.depth); eval_node(&cur.nd, me->w, &ev, R->nfw1, R->nfw2, me->id); }
             me->st.t_bound += now() - t;
             me->st.nodes++; me->st.nodes_depth[cur.nd.depth]++;
             g_nodes_all++; __atomic_fetch_add(&g_depth_all[cur.nd.depth], 1, __ATOMIC_RELAXED);
             if (me->id == 0 && (me->st.nodes & 255) == 0) write_progress(0);
-            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) continue;
+            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             child_t ch[NMAX]; int nch = branch(&cur.nd, me->w, &ev, ch, me->id);
             for (int c = nch - 1; c >= 0; c--) { /* push worst first so best is explored first */
                 sitem_t s; s.nd = cur.nd; s.nd.rc[ch[c].i] = ch[c].j; s.nd.cr[ch[c].j] = ch[c].i; s.nd.depth++; s.lb = ch[c].lb;
                 stack[sp++] = s;
             }
+            me->sp = sp; pthread_mutex_unlock(&me->mtx);
         }
         pthread_mutex_lock(&pool_lock);
         pool_busy--; tasks_done++;
@@ -926,7 +1002,6 @@ static void *worker(void *arg) {
         pthread_cond_broadcast(&pool_cond);
         pthread_mutex_unlock(&pool_lock);
     }
-    free(stack);
     return NULL;
 }
 
@@ -997,6 +1072,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-strat")) strat_name = argv[++a][0];
         else if (!strcmp(argv[a], "-nointprune")) opt_intprune = 0;
         else if (!strcmp(argv[a], "-prog")) g_prog = argv[++a];
+        else if (!strcmp(argv[a], "-ckpt")) opt_ckpt = argv[++a];
+        else if (!strcmp(argv[a], "-ckpt_s")) opt_ckpt_s = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-resume")) opt_resume = argv[++a];
         else if (!strcmp(argv[a], "-v")) opt_verbose = 1;
     }
     if (logfn) g_log = fopen(logfn, "w");
@@ -1035,19 +1113,31 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "solve")) {
         work_t *w = calloc(1, sizeof(work_t));
         node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1; nd.depth = 0;
-        dfs(&nd, w, &tot, 0);
+        g_ckpt_last = now(); g_base = nd; g_base_depth = 0;
+        if (opt_resume) {
+            read_resume(opt_resume);
+            for (g_rnext = 0; g_rnext < g_rn; ) {
+                g_base = g_rlist[g_rnext++]; g_base_depth = g_base.depth;
+                nd = g_base; dfs(&nd, w, &tot, 0);
+            }
+        } else dfs(&nd, w, &tot, 0);
+        if (opt_ckpt) { FILE *f = fopen(opt_ckpt, "w"); if (f) { fprintf(f, "nugckpt 1 n %d ub %.0f nodes %ld elapsed %.1f\n", N, (double)g_ub, g_nodes_before + (long)g_nodes_all, g_elapsed_before + now() - g_t0); fclose(f); } }
         lap_tot = w->nlap; fw_tot = w->nfw;
     } else if (!strcmp(mode, "par")) {
         node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1; nd.depth = 0;
-        pool_push(&nd, -INFINITY);
-        pthread_t th[64]; wk_t wk[64];
-        for (int k = 0; k < opt_threads; k++) { memset(&wk[k], 0, sizeof(wk_t)); wk[k].id = k; wk[k].w = calloc(1, sizeof(work_t)); pthread_create(&th[k], NULL, worker, &wk[k]); }
+        if (opt_resume) { read_resume(opt_resume); for (int r = 0; r < g_rn; r++) pool_push(&g_rlist[r], -INFINITY); }
+        else pool_push(&nd, -INFINITY);
+        pthread_t th[64]; static wk_t wk[64]; g_wk = wk; g_ckpt_last = now();
+        for (int k = 0; k < opt_threads; k++) { memset(&wk[k], 0, sizeof(wk_t)); wk[k].id = k; wk[k].w = calloc(1, sizeof(work_t));
+            wk[k].stack = malloc(sizeof(sitem_t) * NMAX * NMAX * 2); pthread_mutex_init(&wk[k].mtx, NULL); }
+        for (int k = 0; k < opt_threads; k++) pthread_create(&th[k], NULL, worker, &wk[k]);
         for (int k = 0; k < opt_threads; k++) {
             pthread_join(th[k], NULL);
             tot.nodes += wk[k].st.nodes; tot.fathom_at_bound += wk[k].st.fathom_at_bound; tot.t_bound += wk[k].st.t_bound;
             for (int d = 0; d <= N; d++) tot.nodes_depth[d] += wk[k].st.nodes_depth[d];
             lap_tot += wk[k].w->nlap; fw_tot += wk[k].w->nfw;
         }
+        if (opt_ckpt) { FILE *f = fopen(opt_ckpt, "w"); if (f) { fprintf(f, "nugckpt 1 n %d ub %.0f nodes %ld elapsed %.1f\n", N, (double)g_ub, g_nodes_before + (long)g_nodes_all, g_elapsed_before + now() - g_t0); fclose(f); } }
     }
     double el = now() - t0;
     write_progress(1);
