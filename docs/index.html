@@ -66,6 +66,30 @@ section[hidden]{display:none}
 .key b{display:block;font-family:var(--display);font-size:1.05rem;margin-bottom:.2rem}
 .key.sun{border-top-color:var(--sun)} .key.navy{border-top-color:var(--navy)} .key.ok{border-top-color:var(--ok)}
 .note{background:var(--sun-soft);border-left:4px solid var(--sun);padding:.6rem .9rem;border-radius:4px;margin:1rem 0;max-width:80ch}
+.lvl{background:var(--surface);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:8px;padding:1rem 1.1rem;margin:1.1rem 0;max-width:900px}
+.lvl-terra{--c:var(--terra)}.lvl-sun{--c:#d9b92e}.lvl-run{--c:var(--run)}.lvl-navy{--c:var(--navy)}
+.lvl-head{display:flex;gap:.9rem;align-items:center}
+.lvl-head h3{margin:0}.lvl-head p{margin:.1rem 0 0}
+.lvl-num{flex:none;width:2.4rem;height:2.4rem;border-radius:50%;background:var(--c);color:#fff;display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:1.25rem}
+.lvl-sun .lvl-num{color:#3a1a0c}
+.lvl-items{list-style:none;padding:0;margin:.8rem 0 0}
+.it{display:flex;gap:.8rem;padding:.6rem 0;border-top:1px dashed var(--line)}
+.it-num{flex:none;min-width:2.4rem;height:1.6rem;padding:0 .35rem;border-radius:999px;border:2px solid var(--c);color:var(--ink);display:grid;place-items:center;font-family:var(--display);font-weight:700;font-size:.85rem}
+.it-body{min-width:0}
+.it-title b{font-family:var(--display);font-size:1.05rem}
+.it ul{margin:.25rem 0 0;padding-left:1.1rem}.it ul li{margin:.1rem 0}
+.st{font-family:var(--display);font-size:.75rem;font-weight:600;padding:.05rem .5rem;border-radius:999px;vertical-align:2px;white-space:nowrap}
+.st-done{background:var(--ok-soft);color:var(--ok)}.st-code{background:var(--run-soft);color:var(--run)}
+.st-todo{background:var(--terra-soft);color:var(--rust-1)}.st-measure{background:var(--warn-soft);color:var(--warn)}.st-idea{background:var(--sun-soft);color:var(--muted)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:.6rem 0 1rem}
+.tile{background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--terra);border-radius:6px;padding:.6rem .8rem}
+.tile .tv{font-family:var(--display);font-weight:700;font-size:1.5rem;color:var(--ink)}
+.tile .tl{font-size:.85rem;color:var(--muted)}
+.two-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:1rem}
+.chartbox{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.7rem}
+.chartbox figcaption{font-family:var(--display);font-weight:600;margin-bottom:.3rem}
+.chartbox svg{width:100%;height:auto;display:block}
+tr.tot td{border-top:2px solid var(--line)}
 .warnbox{background:var(--warn-soft);border-left:4px solid var(--warn);padding:.6rem .9rem;border-radius:4px;margin:1rem 0;max-width:80ch}
 .src{font-family:var(--display);font-size:.78rem;font-weight:600;letter-spacing:.04em;padding:.05rem .4rem;border-radius:3px;background:var(--terra-soft);color:var(--rust-1);vertical-align:1px;white-space:nowrap}
 :root[data-theme="dark"] .src{color:var(--terra)}
@@ -259,6 +283,19 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
   </table></div>
   <p class="small" lang="fr" data-l="fr">L'estimation n'utilise rien de la résolution (même stratégie, même borne opt+1, tirages aléatoires indépendants) : la faire avant ou après ne change rien à sa valeur. Jusqu'à nug21, elle a été lancée après la résolution et sert de calibration à l'aveugle ; à partir de nug22 elle passe avant, comme ce sera le cas pour nug30. L'ordre réel est indiqué par ① et ②.</p>
   <p class="small" lang="en" data-l="en">The estimate uses nothing from the solve (same strategy, same opt+1 bound, independent random draws), so running it before or after does not change its value. Up to nug21 it was run after the solve and serves as blind calibration; from nug22 on it runs first, as it will for nug30. The actual order is shown by ① and ②.</p>
+
+  <h3><span data-l="fr">Ressources consommées par la campagne</span><span data-l="en">Resources used by the campaign</span></h3>
+  <div class="tiles" id="restiles"></div>
+  <div class="two-charts">
+    <figure class="chartbox"><figcaption><span data-l="fr">Heures-cœur par instance</span><span data-l="en">Core-hours per instance</span></figcaption><div id="resbars"></div></figure>
+    <figure class="chartbox"><figcaption><span data-l="fr">Cumul des heures-cœur dans le temps</span><span data-l="en">Cumulative core-hours over time</span></figcaption><div id="rescum"></div></figure>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Instance</th><th class="num"><span data-l="fr">Calculs</span><span data-l="en">Jobs</span></th><th class="num"><span data-l="fr">Heures-cœur</span><span data-l="en">Core-hours</span></th><th class="num"><span data-l="fr">dont Knuth</span><span data-l="en">of which Knuth</span></th><th class="num"><span data-l="fr">Nœuds évalués</span><span data-l="en">Nodes evaluated</span></th><th class="num"><span data-l="fr">Itérations FW</span><span data-l="en">FW iterations</span></th><th class="num">TFLOP (≈)</th></tr></thead>
+    <tbody id="restable"></tbody>
+  </table></div>
+  <p class="small" lang="fr" data-l="fr">Heures-cœur = durée × nombre de fils, calculs en cours compris. Les flops sont estimés, pas mesurés : environ 10 m³ opérations par itération de Frank-Wolfe sur un nœud à m usines libres (quatre produits de matrices m × m et le LAP), sommés profondeur par profondeur. Pour comparaison, NUG30 en 2000 a consommé l'équivalent de 6,9 années de calcul d'une station HP C3000, soit environ 60 000 heures-cœur de l'époque.</p>
+  <p class="small" lang="en" data-l="en">Core-hours = duration × number of threads, running jobs included. Flops are estimated, not measured: about 10 m³ operations per Frank-Wolfe iteration on a node with m free facilities (four m × m matrix products plus the LAP), summed depth by depth. For comparison, NUG30 in 2000 used the equivalent of 6.9 years of an HP C3000 workstation, about 60,000 core-hours of that time.</p>
 
   <details><summary><span data-l="fr">File complète de la campagne (ordre d'exécution)</span><span data-l="en">Full campaign queue (execution order)</span></summary>
   <div class="tbl"><table>
@@ -580,54 +617,62 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
 <section id="ideas" role="tabpanel" aria-labelledby="t-ideas" hidden>
 <div lang="fr" data-l="fr">
   <h2>Pistes pour aller plus loin</h2>
-  <p class="lead">Trois niveaux : <b>accélérer le même algorithme</b>, <b>changer le compromis borne / arbre</b>, et <b>réutiliser les idées de 2000 pour nos agents</b>.</p>
-  <h3>Accélérer le même algorithme</h3>
-  <div class="keys">
-    <div class="key ok"><b>Fait : LAP démarré à chaud</b>Les prix des colonnes de l'itération précédente servent de départ. Le LAP devient deux fois plus rapide.</div>
-    <div class="key"><b>LAP en entiers et vectorisé</b>Comme Nate en 2001, arrondir le gradient en entiers ; résoudre plusieurs LAP de nœuds différents en même temps (AVX-512, ou GPU).</div>
-    <div class="key"><b>Moins de valeurs propres</b>Les décompositions spectrales ne dépendent que des ensembles d'usines et d'emplacements libres. Les réutiliser entre frères et au fil des plongées.</div>
-    <div class="key"><b>Repartir du parent</b>Initialiser Frank-Wolfe chez l'enfant avec la solution du parent restreinte, plutôt qu'avec ee<sup>T</sup>/n. Le papier dit avoir essayé sans gain fiable ; à remesurer.</div>
-  </div>
-  <h3>Changer le compromis</h3>
-  <div class="keys">
-    <div class="key sun"><b>Décalages diagonaux par nœud</b>À la racine, ils font passer la borne de nug30 de 5 341 à 5 510. Le gain disparaît plus bas parce que les décalages ne sont plus adaptés : il faut les réoptimiser par nœud, à un coût à mesurer.</div>
-    <div class="key sun"><b>Borne hybride</b>Une borne forte et chère (DNN, RLT2, SDP) aux premiers niveaux, où chaque nœud élagué supprime des millions de descendants, et QPB plus bas.</div>
-    <div class="key sun"><b>Réglage automatique de la stratégie</b>L'estimateur de Knuth prédit la taille de l'arbre en quelques minutes. On peut s'en servir pour choisir les seuils de profondeur, NFW et NBEST instance par instance.</div>
-  </div>
-  <h3>Le branch-and-bound coordonné</h3>
-  <p>Comme en 2000, un <b>maître</b> garde le pool des nœuds ouverts et des <b>workers</b> explorent chacun un sous-arbre en profondeur. Toute amélioration de la meilleure solution est <b>diffusée aussitôt</b> à tous (ici par mémoire partagée), et un worker en fin de tranche ne rend que ses nœuds les plus hauts, dans l'esprit de la finish-up strategy. Le code est écrit (mode <code>par</code>, 4 fils) et validé sur nug15 ; son journal d'événements alimentera la page « En direct ».</p>
-  <h3>Les idées de 2000 appliquées aux agents</h3>
-  <div class="keys">
-    <div class="key navy"><b>Finish-up pour les agents</b>Budget fixe, puis clôture de la branche en cours et rendu de 3 ou 4 pistes reprenables, plutôt qu'un arrêt brutal qui laisse des miettes.</div>
-    <div class="key navy"><b>Un estimateur avant la campagne</b>Comme Knuth pour l'arbre, une plongée rapide pour estimer le coût d'une campagne d'agents avant de la lancer.</div>
-    <div class="key navy"><b>Des agents qui cherchent des règles</b>Ici le juge est un programme : une règle de branchement proposée par un agent se note par la taille d'arbre estimée.</div>
-  </div>
+  <p class="lead">Quatre chantiers, classés du plus sûr au plus spéculatif. Chaque piste porte son état : fait, écrit, à mesurer ou simple idée.</p>
+  <div class="lvl lvl-terra"><div class="lvl-head"><span class="lvl-num">1</span><div><h3>Accélérer le même algorithme</h3><p class="small">Même borne, même arbre : chaque nœud coûte moins cher.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">1.1</span><div class="it-body"><div class="it-title"><b>LAP démarré à chaud</b> <span class="st st-done">Fait</span></div><ul><li>Les prix des colonnes de l'itération précédente servent de point de départ.</li><li>Le LAP devient <b>deux fois plus rapide</b>.</li></ul></div></li>
+    <li class="it"><span class="it-num">1.2</span><div class="it-body"><div class="it-title"><b>LAP en entiers et vectorisé</b> <span class="st st-todo">À faire</span></div><ul><li>Arrondir le gradient en entiers, comme Nate en 2001.</li><li>Résoudre plusieurs LAP de nœuds différents en même temps (AVX-512).</li></ul></div></li>
+    <li class="it"><span class="it-num">1.3</span><div class="it-body"><div class="it-title"><b>Moins de décompositions spectrales</b> <span class="st st-todo">À faire</span></div><ul><li>Elles ne dépendent que des usines et emplacements libres.</li><li>Les <b>réutiliser</b> entre frères et le long d'une plongée.</li></ul></div></li>
+    <li class="it"><span class="it-num">1.4</span><div class="it-body"><div class="it-title"><b>Repartir du parent</b> <span class="st st-measure">À mesurer</span></div><ul><li>Initialiser Frank-Wolfe avec la solution du parent restreinte, au lieu de ee<sup>T</sup>/n.</li><li>Le papier n'y voyait pas de gain fiable ; à remesurer.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-sun"><div class="lvl-head"><span class="lvl-num">2</span><div><h3>Changer le compromis borne / arbre</h3><p class="small">Payer plus cher certains nœuds pour en évaluer beaucoup moins.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">2.1</span><div class="it-body"><div class="it-title"><b>Décalages diagonaux par nœud</b> <span class="st st-measure">À mesurer</span></div><ul><li>À la racine, la borne de nug30 passe de <b>5 341 à 5 510</b>.</li><li>Plus bas, les décalages de la racine ne sont plus adaptés : il faut les réoptimiser par nœud, à un coût à mesurer.</li></ul></div></li>
+    <li class="it"><span class="it-num">2.2</span><div class="it-body"><div class="it-title"><b>Borne hybride</b> <span class="st st-idea">Idée</span></div><ul><li>Une borne forte et chère (DNN, RLT2, SDP) aux <b>premiers niveaux</b>, où un nœud élagué supprime des millions de descendants.</li><li>QPB plus bas, là où elle est rentable.</li></ul></div></li>
+    <li class="it"><span class="it-num">2.3</span><div class="it-body"><div class="it-title"><b>Réglage automatique de la stratégie</b> <span class="st st-todo">À faire</span></div><ul><li>L'estimateur de Knuth prédit la taille de l'arbre en quelques minutes.</li><li>Il peut choisir, instance par instance, les seuils de profondeur, NFW et NBEST.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-run"><div class="lvl-head"><span class="lvl-num">3</span><div><h3>Paralléliser comme en 2000</h3><p class="small">Le schéma maître / workers de l'article, sur les cœurs d'une machine.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">3.1</span><div class="it-body"><div class="it-title"><b>Maître et workers</b> <span class="st st-code">Écrit et testé</span></div><ul><li>Le maître garde le pool des nœuds ouverts ; chaque worker explore un sous-arbre en profondeur.</li></ul></div></li>
+    <li class="it"><span class="it-num">3.2</span><div class="it-body"><div class="it-title"><b>Diffusion immédiate de la meilleure solution</b> <span class="st st-code">Écrit et testé</span></div><ul><li>Toute amélioration est vue aussitôt par tous les workers (mémoire partagée).</li></ul></div></li>
+    <li class="it"><span class="it-num">3.3</span><div class="it-body"><div class="it-title"><b>Esprit finish-up</b> <span class="st st-code">Écrit et testé</span></div><ul><li>En fin de tranche, un worker ne rend que ses nœuds les plus hauts.</li><li>Mesuré sur nug17 : <b>2 fils, 1,95 fois plus rapide</b>, même arbre et même optimum.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-navy"><div class="lvl-head"><span class="lvl-num">4</span><div><h3>Les idées de 2000 pour nos agents</h3><p class="small">Ce que le B&amp;B sur grille enseigne pour piloter des agents.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">4.1</span><div class="it-body"><div class="it-title"><b>Finish-up pour les agents</b> <span class="st st-idea">Idée</span></div><ul><li>Budget fixe, puis clôture de la branche en cours et rendu de 3 ou 4 pistes reprenables.</li></ul></div></li>
+    <li class="it"><span class="it-num">4.2</span><div class="it-body"><div class="it-title"><b>Un estimateur avant la campagne</b> <span class="st st-idea">Idée</span></div><ul><li>Comme Knuth pour l'arbre : une plongée rapide pour estimer le coût d'une campagne d'agents.</li></ul></div></li>
+    <li class="it"><span class="it-num">4.3</span><div class="it-body"><div class="it-title"><b>Des agents qui cherchent des règles</b> <span class="st st-idea">Idée</span></div><ul><li>Le juge est un programme : une règle de branchement proposée se note par la taille d'arbre estimée.</li></ul></div></li>
+  </ol></div>
   <div class="warnbox"><b>Casser un record ?</b> NUG30 est résolu. Un record utile serait soit le <b>temps sur une seule machine sans GPU</b> (environ une journée avec GPU en 2015-2017), soit une <b>instance encore ouverte</b>. Les candidates de taille 35 à 40 (tai35a, tai40a) ont résisté à des moyens bien supérieurs aux nôtres : il faut d'abord mesurer, avec l'estimateur, ce qu'elles coûteraient.</div>
 </div>
 <div lang="en" data-l="en">
   <h2>Ways to go further</h2>
-  <p class="lead">Three levels: <b>speed up the same algorithm</b>, <b>change the bound / tree trade-off</b>, and <b>reuse the ideas of 2000 for our agents</b>.</p>
-  <h3>Speed up the same algorithm</h3>
-  <div class="keys">
-    <div class="key ok"><b>Done: warm-started LAP</b>The column prices of the previous iteration serve as the starting point. The LAP becomes twice as fast.</div>
-    <div class="key"><b>Integer and vectorized LAP</b>As Nate did in 2001, round the gradient to integers; solve several LAPs from different nodes at once (AVX-512 or GPU).</div>
-    <div class="key"><b>Fewer eigen-decompositions</b>Spectral decompositions depend only on the sets of free facilities and locations. Reuse them across siblings and along dives.</div>
-    <div class="key"><b>Start from the parent</b>Initialize Frank-Wolfe in the child from the parent's restricted solution instead of ee<sup>T</sup>/n. The paper reports no reliable gain; worth re-measuring.</div>
-  </div>
-  <h3>Change the trade-off</h3>
-  <div class="keys">
-    <div class="key sun"><b>Diagonal shifts per node</b>At the root they lift the nug30 bound from 5,341 to 5,510. The gain fades deeper because the shifts no longer fit; they must be re-optimized per node, at a cost to be measured.</div>
-    <div class="key sun"><b>Hybrid bound</b>A strong, expensive bound (DNN, RLT2, SDP) at the top levels, where each pruned node removes millions of descendants, and QPB below.</div>
-    <div class="key sun"><b>Automatic strategy tuning</b>Knuth's estimator predicts tree size in minutes. It can pick depth cut-offs, NFW and NBEST per instance.</div>
-  </div>
-  <h3>Coordinated branch-and-bound</h3>
-  <p>As in 2000, a <b>master</b> holds the pool of open nodes and <b>workers</b> each explore a subtree depth-first. Any improvement of the incumbent is <b>broadcast at once</b> to all (here through shared memory), and a worker at the end of its slice returns only its highest nodes, in the spirit of the finish-up strategy. The code is written (<code>par</code> mode, 4 threads) and validated on nug15; its event log will feed the Live page.</p>
-  <h3>Ideas from 2000 applied to agents</h3>
-  <div class="keys">
-    <div class="key navy"><b>Finish-up for agents</b>A fixed budget, then closing the current branch and handing back 3 or 4 resumable leads, instead of an abrupt stop that leaves crumbs.</div>
-    <div class="key navy"><b>An estimator before the campaign</b>As Knuth did for trees, a quick dive to estimate the cost of an agent campaign before launching it.</div>
-    <div class="key navy"><b>Agents that search for rules</b>Here the judge is a program: a branching rule proposed by an agent is scored by its estimated tree size.</div>
-  </div>
+  <p class="lead">Four lines of work, from the safest to the most speculative. Each item shows its status: done, written, to measure, or idea.</p>
+  <div class="lvl lvl-terra"><div class="lvl-head"><span class="lvl-num">1</span><div><h3>Speed up the same algorithm</h3><p class="small">Same bound, same tree: each node costs less.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">1.1</span><div class="it-body"><div class="it-title"><b>Warm-started LAP</b> <span class="st st-done">Done</span></div><ul><li>The column prices of the previous iteration are the starting point.</li><li>The LAP becomes <b>twice as fast</b>.</li></ul></div></li>
+    <li class="it"><span class="it-num">1.2</span><div class="it-body"><div class="it-title"><b>Integer and vectorized LAP</b> <span class="st st-todo">To do</span></div><ul><li>Round the gradient to integers, as Nate did in 2001.</li><li>Solve several LAPs from different nodes at once (AVX-512).</li></ul></div></li>
+    <li class="it"><span class="it-num">1.3</span><div class="it-body"><div class="it-title"><b>Fewer eigen-decompositions</b> <span class="st st-todo">To do</span></div><ul><li>They depend only on the free facilities and locations.</li><li><b>Reuse</b> them across siblings and along a dive.</li></ul></div></li>
+    <li class="it"><span class="it-num">1.4</span><div class="it-body"><div class="it-title"><b>Start from the parent</b> <span class="st st-measure">To measure</span></div><ul><li>Initialize Frank-Wolfe from the parent's restricted solution instead of ee<sup>T</sup>/n.</li><li>The paper saw no reliable gain; worth re-measuring.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-sun"><div class="lvl-head"><span class="lvl-num">2</span><div><h3>Change the bound / tree trade-off</h3><p class="small">Pay more for some nodes to evaluate far fewer.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">2.1</span><div class="it-body"><div class="it-title"><b>Diagonal shifts per node</b> <span class="st st-measure">To measure</span></div><ul><li>At the root, the nug30 bound rises from <b>5,341 to 5,510</b>.</li><li>Deeper down the root shifts no longer fit: they must be re-optimized per node, at a cost to be measured.</li></ul></div></li>
+    <li class="it"><span class="it-num">2.2</span><div class="it-body"><div class="it-title"><b>Hybrid bound</b> <span class="st st-idea">Idea</span></div><ul><li>A strong, expensive bound (DNN, RLT2, SDP) at the <b>top levels</b>, where one pruned node removes millions of descendants.</li><li>QPB below, where it pays off.</li></ul></div></li>
+    <li class="it"><span class="it-num">2.3</span><div class="it-body"><div class="it-title"><b>Automatic strategy tuning</b> <span class="st st-todo">To do</span></div><ul><li>Knuth's estimator predicts tree size in minutes.</li><li>It can pick depth cut-offs, NFW and NBEST per instance.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-run"><div class="lvl-head"><span class="lvl-num">3</span><div><h3>Parallelize as in 2000</h3><p class="small">The paper's master / worker scheme, on the cores of one machine.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">3.1</span><div class="it-body"><div class="it-title"><b>Master and workers</b> <span class="st st-code">Written and tested</span></div><ul><li>The master holds the pool of open nodes; each worker explores a subtree depth-first.</li></ul></div></li>
+    <li class="it"><span class="it-num">3.2</span><div class="it-body"><div class="it-title"><b>Immediate broadcast of the incumbent</b> <span class="st st-code">Written and tested</span></div><ul><li>Any improvement is seen at once by every worker (shared memory).</li></ul></div></li>
+    <li class="it"><span class="it-num">3.3</span><div class="it-body"><div class="it-title"><b>Finish-up spirit</b> <span class="st st-code">Written and tested</span></div><ul><li>At the end of its slice, a worker hands back only its highest nodes.</li><li>Measured on nug17: <b>2 threads, 1.95 times faster</b>, same tree and same optimum.</li></ul></div></li>
+  </ol></div>
+  <div class="lvl lvl-navy"><div class="lvl-head"><span class="lvl-num">4</span><div><h3>Ideas from 2000 for our agents</h3><p class="small">What grid B&amp;B teaches about running agents.</p></div></div>
+  <ol class="lvl-items">
+    <li class="it"><span class="it-num">4.1</span><div class="it-body"><div class="it-title"><b>Finish-up for agents</b> <span class="st st-idea">Idea</span></div><ul><li>A fixed budget, then closing the current branch and handing back 3 or 4 resumable leads.</li></ul></div></li>
+    <li class="it"><span class="it-num">4.2</span><div class="it-body"><div class="it-title"><b>An estimator before the campaign</b> <span class="st st-idea">Idea</span></div><ul><li>As Knuth for trees: a quick dive to estimate the cost of an agent campaign.</li></ul></div></li>
+    <li class="it"><span class="it-num">4.3</span><div class="it-body"><div class="it-title"><b>Agents that search for rules</b> <span class="st st-idea">Idea</span></div><ul><li>The judge is a program: a proposed branching rule is scored by its estimated tree size.</li></ul></div></li>
+  </ol></div>
   <div class="warnbox"><b>Breaking a record?</b> NUG30 is solved. A useful record would be either the <b>time on a single machine without a GPU</b> (about a day with a GPU in 2015-2017), or an <b>instance still open</b>. The size 35 to 40 candidates (tai35a, tai40a) have resisted far larger means than ours; we must first measure, with the estimator, what they would cost.</div>
 </div>
 </section>
@@ -770,6 +815,67 @@ button.prize:focus-visible{outline:2px solid #fff;outline-offset:2px}
       return `<tr><td><span class="pill ${st}">${lab}</span></td><td>${esc(LANG==='en'&&j.label_en?j.label_en:j.label||j.id)}<div class="small mono">${esc(j.args||'')}</div></td><td class="num">${nodes!=null?fmtBig(nodes):''}</td><td class="num">${fmtDur(dur)}</td><td class="num">${optcell}</td><td class="small">${cmp}</td></tr>`}).join('');
     drawChart(ours);
     renderPerInst(jobs, now);
+    renderRes(jobs, now);
+  }
+  function jobFlops(j){
+    const r=j.result||{}; const n=parseInt((j.instance||'').replace(/\D/g,''))||0;
+    const dep=r.nodes_depth||(j.progress||{}).nodes_depth; if(!dep||!n) return 0;
+    const nodes=dep.reduce((a,b)=>a+b,0); const ipn=(r.fw_iters&&r.nodes)?r.fw_iters/r.nodes:126;
+    let f=0; dep.forEach((c,d)=>{const m=n-d; if(m>0) f+=c*ipn*10*m*m*m;}); return f;
+  }
+  function renderRes(jobs, now){
+    const css=getComputedStyle(document.documentElement), col=k=>css.getPropertyValue(k).trim()||'#888';
+    const rows={}, order=[], events=[];
+    let totH=0,totN=0,totI=0,totF=0,nj=0;
+    jobs.forEach(j=>{ if(!j.start) return; nj++;
+      const r=j.result||{}, p=j.progress||{}; const thr=r.threads||1;
+      const end=j.end||now; const h=(r.wall_s!=null?r.wall_s:(end-j.start))*thr/3600;
+      const nodes=r.mode==='estimate'?(r.nodes_evaluated||p.nodes||0):(r.nodes!=null?r.nodes:(p.nodes||0));
+      const it=r.fw_iters||0; const fl=r.mode==='estimate'?0:jobFlops(j);
+      if(!rows[j.instance]){rows[j.instance]={jobs:0,h:0,hk:0,n:0,i:0,f:0}; order.push(j.instance);}
+      const R=rows[j.instance]; R.jobs++; R.h+=h; if(j.mode==='estimate') R.hk+=h; R.n+=nodes; R.i+=it; R.f+=fl;
+      totH+=h; totN+=nodes; totI+=it; totF+=fl;
+      events.push([j.start,thr/3600,j.instance],[end,-thr/3600,j.instance]);
+    });
+    const tile=(v,l)=>`<div class="tile"><div class="tv">${v}</div><div class="tl">${l}</div></div>`;
+    document.getElementById('restiles').innerHTML=
+      tile(fmtNum(totH,2),T('heures-cœur','core-hours'))+tile(fmtInt(nj),T('calculs lancés','jobs started'))+
+      tile(fmtBig(totN),T('nœuds évalués','nodes evaluated'))+tile(fmtBig(totI),T('itérations de Frank-Wolfe','Frank-Wolfe iterations'))+
+      tile('≈ '+fmtNum(totF/1e12,1),T('TFLOP (estimés)','TFLOP (estimated)'));
+    order.sort((a,b)=>(parseInt(a.slice(3))-parseInt(b.slice(3)))||a.localeCompare(b));
+    document.getElementById('restable').innerHTML=order.map(k=>{const R=rows[k]; return `<tr><td><b>${esc(k)}</b></td><td class="num">${R.jobs}</td><td class="num">${fmtNum(R.h,3)}</td><td class="num">${fmtNum(R.hk,3)}</td><td class="num">${fmtBig(R.n)}</td><td class="num">${R.i?fmtBig(R.i):''}</td><td class="num">${R.f?fmtNum(R.f/1e12,2):''}</td></tr>`}).join('')+
+      `<tr class="tot"><td><b>Total</b></td><td class="num">${nj}</td><td class="num"><b>${fmtNum(totH,3)}</b></td><td class="num"></td><td class="num">${fmtBig(totN)}</td><td class="num">${fmtBig(totI)}</td><td class="num">${fmtNum(totF/1e12,2)}</td></tr>`;
+    // bars: horizontal, solve + Knuth stacked
+    const W=380,bh=18,gap=8,Lb=64,Rb=56,H=order.length*(bh+gap)+34; const mx=Math.max(1e-6,...order.map(k=>rows[k].h));
+    const xs=v=>Lb+v/mx*(W-Lb-Rb);
+    let b=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${T('Heures-cœur par instance','Core-hours per instance')}">`;
+    order.forEach((k,ix)=>{const R=rows[k], y0=8+ix*(bh+gap); const ws=xs(R.h-R.hk)-Lb, wk=xs(R.hk)-Lb;
+      b+=`<text x="${Lb-8}" y="${y0+bh-5}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="11" fill="${col('--muted')}">${k}</text>`;
+      if(ws>0.5) b+=`<rect x="${Lb}" y="${y0}" width="${Math.max(1,ws-(wk>0.5?2:0))}" height="${bh}" rx="3" fill="${col('--terra')}"><title>${k} · ${T('résolution','solve')} : ${fmtNum(R.h-R.hk,3)} h</title></rect>`;
+      if(wk>0.5) b+=`<rect x="${Lb+ws}" y="${y0}" width="${wk}" height="${bh}" rx="3" fill="${col('--navy')}"><title>${k} · Knuth : ${fmtNum(R.hk,3)} h</title></rect>`;
+      b+=`<text x="${xs(R.h)+6}" y="${y0+bh-5}" font-family="JetBrains Mono,monospace" font-size="11" fill="${col('--ink')}">${fmtNum(R.h,2)}</text>`;});
+    const ly=H-14; b+=`<rect x="${Lb}" y="${ly-9}" width="10" height="10" rx="2" fill="${col('--terra')}"/><text x="${Lb+14}" y="${ly}" font-size="11" font-family="Fira Sans Condensed,sans-serif" fill="${col('--muted')}">${T('résolution','solve')}</text>`;
+    b+=`<rect x="${Lb+90}" y="${ly-9}" width="10" height="10" rx="2" fill="${col('--navy')}"/><text x="${Lb+104}" y="${ly}" font-size="11" font-family="Fira Sans Condensed,sans-serif" fill="${col('--muted')}">${T('estimation de Knuth','Knuth estimate')}</text></svg>`;
+    document.getElementById('resbars').innerHTML=b;
+    // cumulative core-hours: integrate active threads over time
+    events.sort((a,c)=>a[0]-c[0]); if(!events.length){document.getElementById('rescum').innerHTML='';return;}
+    const t0=events[0][0], t1=Math.max(now,events[events.length-1][0]); const pts=[[t0,0]]; let act=0,cum=0,tp=t0;
+    events.forEach(e=>{cum+=act*(e[0]-tp); tp=e[0]; act+=e[1]; pts.push([e[0],cum]);}); cum+=act*(t1-tp); pts.push([t1,cum]);
+    const CW=380,CH=240,cl=46,cr=12,ct=12,cb=30; const X=t=>cl+(t-t0)/Math.max(1,t1-t0)*(CW-cl-cr), Ymax=Math.max(cum,1e-6)*1.08, Y=v=>ct+(1-v/Ymax)*(CH-ct-cb);
+    let c=`<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="${T('Cumul des heures-cœur','Cumulative core-hours')}" id="cumsvg">`;
+    for(let g=0;g<=4;g++){const v=Ymax*g/4, yy=Y(v); c+=`<line x1="${cl}" x2="${CW-cr}" y1="${yy}" y2="${yy}" stroke="${col('--line')}"/><text x="${cl-6}" y="${yy+4}" text-anchor="end" font-size="10" font-family="JetBrains Mono,monospace" fill="${col('--muted')}">${fmtNum(v,1)}</text>`;}
+    const hh=t=>new Date(t*1000).toLocaleTimeString(LANG==='en'?'en-GB':'fr-FR',{hour:'2-digit',minute:'2-digit'});
+    [t0,(t0+t1)/2,t1].forEach((t,i)=>{c+=`<text x="${X(t)}" y="${CH-10}" text-anchor="${['start','middle','end'][i]}" font-size="10" font-family="JetBrains Mono,monospace" fill="${col('--muted')}">${hh(t)}</text>`;});
+    c+=`<path d="${pts.map((p,i)=>(i?'L':'M')+X(p[0]).toFixed(1)+' '+Y(p[1]).toFixed(1)).join('')}" fill="none" stroke="${col('--terra')}" stroke-width="2"/>`;
+    c+=`<line id="cumx" y1="${ct}" y2="${CH-cb}" stroke="${col('--muted')}" stroke-dasharray="3 3" visibility="hidden"/><circle id="cumdot" r="4" fill="${col('--terra')}" stroke="${col('--surface')}" stroke-width="2" visibility="hidden"/>`;
+    c+=`<rect x="${cl}" y="${ct}" width="${CW-cl-cr}" height="${CH-ct-cb}" fill="transparent" id="cumhit"/></svg><div class="small" id="cumtip">${T('Survoler la courbe pour lire le cumul.','Hover the curve to read the total.')}</div>`;
+    const box=document.getElementById('rescum'); box.innerHTML=c;
+    const svg=box.querySelector('svg'), hit=box.querySelector('#cumhit');
+    hit.addEventListener('mousemove',ev=>{const r=svg.getBoundingClientRect(); const sx=(ev.clientX-r.left)/r.width*CW; const t=t0+(sx-cl)/(CW-cl-cr)*(t1-t0);
+      let v=0; for(let i=1;i<pts.length;i++){ if(pts[i][0]>=t){const a=pts[i-1],q=pts[i]; v=a[1]+(q[1]-a[1])*((t-a[0])/Math.max(1e-9,q[0]-a[0])); break;} v=pts[i][1]; }
+      const L1=box.querySelector('#cumx'), D=box.querySelector('#cumdot'); L1.setAttribute('x1',X(t)); L1.setAttribute('x2',X(t)); L1.setAttribute('visibility','visible'); D.setAttribute('cx',X(t)); D.setAttribute('cy',Y(v)); D.setAttribute('visibility','visible');
+      box.querySelector('#cumtip').textContent=`${hh(t)} · ${fmtNum(v,2)} ${T('heures-cœur','core-hours')}`;});
+    hit.addEventListener('mouseleave',()=>{box.querySelector('#cumx').setAttribute('visibility','hidden');box.querySelector('#cumdot').setAttribute('visibility','hidden');});
   }
   const openDet=new Set();
   document.addEventListener('toggle',e=>{const d=e.target; if(d.dataset&&d.dataset.job){ d.open?openDet.add(d.dataset.job):openDet.delete(d.dataset.job);} },true);

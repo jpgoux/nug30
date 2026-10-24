@@ -1,12 +1,12 @@
 {
- "updated": 1792856428.350743,
+ "updated": 1792856641.1250453,
  "machine": {
   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
   "cores": 4,
   "load": [
-   2.0576171875,
-   2.30322265625,
-   2.31640625
+   2.0419921875,
+   2.197265625,
+   2.267578125
   ],
   "maxj": 2
  },
@@ -768,12 +768,12 @@
    "start": 1792856376.5770032,
    "end": null,
    "progress": {
-    "elapsed_s": 47.5,
-    "dives_done": 19,
+    "elapsed_s": 263.8,
+    "dives_done": 106,
     "dives_total": 400,
-    "nodes": 136,
-    "est_nodes": 8299900.0,
-    "est_time_s": 8296.0,
+    "nodes": 708,
+    "est_nodes": 13637000.0,
+    "est_time_s": 9907.4,
     "final": 0
    }
   },
@@ -889,6 +889,26 @@
      1
     ]
    }
+  },
+  {
+   "id": "k1_nug27_D",
+   "instance": "nug27",
+   "label": "nug27, estimation de Knuth (300 plongées)",
+   "desc": "Taille d'arbre prédite, à comparer à l'arbre du papier de 2002 (résolution complète hors de portée sur 4 cœurs).",
+   "args": "-strat D -dives 300 -q 1.5 -seed 7 -ub 5235 -nointprune",
+   "mode": "estimate",
+   "group": "Calibration Knuth",
+   "status": "pending"
+  },
+  {
+   "id": "k1_nug28_D",
+   "instance": "nug28",
+   "label": "nug28, estimation de Knuth (300 plongées)",
+   "desc": "Taille d'arbre prédite, à comparer à l'arbre du papier de 2002 (résolution complète hors de portée sur 4 cœurs).",
+   "args": "-strat D -dives 300 -q 1.5 -seed 7 -ub 5167 -nointprune",
+   "mode": "estimate",
+   "group": "Calibration Knuth",
+   "status": "pending"
   },
   {
    "id": "r1_nug24_D",
