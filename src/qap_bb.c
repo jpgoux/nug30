@@ -456,7 +456,7 @@ static int opt_pfw = 0;
  * point is doubly stochastic, so the Frank-Wolfe bounds stay valid. */
 static int opt_lasize = 0, opt_lanb = 5, opt_lanfw = 18;   /* rule 3 below the strategy's levels while m >= opt_lasize */
 static int opt_lacap = 1;   /* look-ahead: child bounds capped at the threshold, hopeless candidates abandoned */
-static int opt_warm = 0;   /* 1: look-ahead children start from the parent's point */
+static int opt_warm = 2;   /* 1: look-ahead children, 2: children in the serial search, start from the parent's point; 4: S, T fitted there */
 static void inherit_x(work_t *dst, const double X[NMAX][NMAX], int m, int a, int b) {
     double sden = 1 - X[a][b];
     dst->x0_ok = 0;
@@ -673,6 +673,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     double inv = 1.0 / m;
     if (w->x0_ok) {   /* inherited starting point */
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] = w->X0[i][j];
+        if (opt_warm & 4) update_st(w, m);   /* S, T fitted to the inherited point before the first step */
         applyM(w, m, w->X, w->MX);
         w->x0_ok = 0;
     } else {
@@ -1165,14 +1166,21 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     child_t ch[NMAX];
     int nch = branch(nd, w, &ev, ch, who);
     int d0 = nd->depth;
+    double (*Xp)[NMAX] = NULL; int posF[NMAX], posL[NMAX];
+    if (opt_warm & 2) {   /* children start from the parent's final point, restricted (inherit_x) */
+        Xp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Xp, w->X, sizeof(double) * NMAX * NMAX);
+        for (int a = 0; a < ev.m; a++) { posF[ev.F[a]] = a; posL[ev.L[a]] = a; }
+    }
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
+        if (Xp) inherit_x(w, (const double (*)[NMAX])Xp, ev.m, posF[ch[c].i], posL[ch[c].j]);
         g_chs[d0] = ch; g_nch[d0] = nch; g_cidx[d0] = c;
         g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
         dfs(nd, w, st, who);
         nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
     }
+    free(Xp);
     g_curdepth = d0;
 }
 

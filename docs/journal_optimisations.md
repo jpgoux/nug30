@@ -58,6 +58,15 @@ Seuls les arrondis changent (quelques itérations de FW sur nug12 et nug17), nom
 - Effet : la troncature favorise les candidates qui éliminent le plus d'enfants plutôt que celles dont les bornes dépassent de beaucoup le seuil, ce qui réduit aussi le nombre de nœuds (nug14 −36 %, nug17 −4 %, nug20 −0,9 %). Gains par instance du banc : 1,53 / 1,69 / 1,42 / 1,52 / 1,77.
 - Leçon : le banc de petites instances surestime les gains de l'anticipation. Chaque gain doit désormais être mesuré aussi sur nug20 et nug22.
 
+### B3. Les enfants partent du point final du père (banc × 1,08 ; nug20 × 1,21 ; nug22 × 1,29)
+- Avant : chaque nœud lançait Frank-Wolfe depuis X₀ = eeᵀ/m.
+- Maintenant, dans la recherche en profondeur série, le père garde son point final X (m × m). L'enfant qui fixe la ligne a sur la colonne b part de X privé de la ligne a et de la colonne b, plus le terme de rang un X[:, b] X[a, :] / (1 − X[a][b]). Sommes de lignes : Σ_q≠b X[p][q] + X[p][b] (1 − X[a][b]) / (1 − X[a][b]) = 1 ; idem pour les colonnes. Le point est donc doublement stochastique, et tout point de départ donne une borne valide.
+- Effet sur nug22 : itérations de FW 34,3 M → 23,9 M (−30 %), nœuds 2,04 M → 1,91 M (−6 %). Le père et l'enfant ont des problèmes proches, et l'enfant près du seuil de coupe l'atteint plus vite.
+- Différence avec l'essai sans gain du même nom (tableau ci-dessous) : celui-là ne portait que sur les enfants évalués par l'anticipation, avec 18 à 35 itérations seulement.
+- Variante : réajuster S et T au point de départ (`-warm 6`) : nug20 × 1,23, nug22 × 1,22 ; non retenue.
+- Reprise après checkpoint : les nœuds relus dans le fichier partent du centre (le point du père n'est pas sauvé), donc l'arbre repris diffère un peu (nug17 : 57 108 nœuds contre 57 085). Le test vérifie la reprise exacte avec `-warm 0` et l'écart de moins de 1 % avec le défaut.
+- À faire : la recherche parallèle n'utilise pas encore ce départ.
+
 ### Mesure directe face au code de 2000 (24 octobre, 19 h 30 UTC)
 Même machine, même charge, stratégie C, borne supérieure optimum + 1 : nug20 285,8 s → 75,3 s (× 3,80) ; nug22 691,5 s → 155,0 s (× 4,46).
 
