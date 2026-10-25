@@ -200,3 +200,5 @@ nug30 a demandé 6,94 années de HP C3000, soit 94 à 127 jours sur un cœur de 
 - nug24 stratégie D avec `-dom` : 21 242 561 nœuds, 2 663 s (référence sans dom sur la nouvelle machine en cours).
 - Estimations nug30 (graine 19) : 1,62 × 10¹⁰ nœuds sans dom, 1,74 × 10¹⁰ avec ; seuil de preuve ub = opt (graine 23) : 2,25 × 10¹⁰. Différences dans le bruit de l'estimateur.
 - Bilan de la littérature par brique : `docs/litterature_par_brique.md`.
+- Seconde borne QPB sur données décalées, utilisée seulement pour élaguer (`-dual`, décalages de la racine) : nug18, 245 nœuds élagués sur 182 246 essais ; inutile.
+- Décalages optimisés nœud par nœud (pour PB, par Powell, puis QPB à 150 itérations ; mesure hors solveur, mode `root` avec `FIX`) : nug20, 60 nœuds de la frontière de profondeur 3, médiane 9 % de l'écart au seuil comblé, 3 nœuds élagués de plus (poids 10⁻⁵ de l'arbre) ; à la profondeur 6, médiane −3 % (les décalages bons pour PB dégradent QPB). Piste abandonnée.

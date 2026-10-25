@@ -1293,7 +1293,7 @@ static int domcov(const node_t *nd, const eval_t *ev, const work_t *w) {
     return 0;
 }
 
-static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
+static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
     int m = 0, mc = 0;
     w->maskF = w->maskL = 0;
     for (int i = 0; i < N; i++) if (nd->rc[i] < 0) { ev->F[m++] = i; w->maskF |= 1u << i; }
@@ -1362,6 +1362,30 @@ static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2
         for (int a = 0; a < m; a++) p[ev->F[a]] = ev->L[bp[a]];
         report_solution(p, ubf, who);
     }
+}
+
+/* -dual file: a second QPB on the equivalent data A + diag(d), B + diag(g), C0 shifted
+ * (same cost for every permutation), tried only when the first one does not fathom; used
+ * only as a fathoming test, the branching data stay those of the first bound. One thread. */
+static const char *opt_dual = NULL; static int opt_dualmin = 0;
+static double A2[NMAX][NMAX], B2[NMAX][NMAX], C02[NMAX][NMAX];
+static long g_dualcalls = 0, g_dualfath = 0;
+static void print_dual(void) { if (opt_dual) fprintf(stderr, "dual: %ld calls, %ld fathomed\n", g_dualcalls, g_dualfath); }
+static void swap_data(void) {
+    static double t[NMAX][NMAX];
+    memcpy(t, A, sizeof t); memcpy(A, A2, sizeof t); memcpy(A2, t, sizeof t);
+    memcpy(t, B, sizeof t); memcpy(B, B2, sizeof t); memcpy(B2, t, sizeof t);
+    memcpy(t, C0, sizeof t); memcpy(C0, C02, sizeof t); memcpy(C02, t, sizeof t);
+}
+static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
+    eval_node1(nd, w, ev, nfw, nfw2, who);
+    if (!opt_dual || ev->m <= 2 || nd->depth < opt_dualmin || !(ev->z <= prune_thr(g_ub))) return;
+    static work_t *ws = NULL; if (!ws) ws = calloc(1, sizeof(work_t));
+    ws->x0_ok = 0; eval_t e2;
+    swap_data(); eval_node1(nd, ws, &e2, nfw, nfw2, who); swap_data();
+    g_dualcalls++;
+    if (e2.z > prune_thr(g_ub)) { g_dualfath++; ev->z = e2.z; w->x0_ok = 0;
+        for (int a = 0; a < ev->m; a++) for (int b = 0; b < ev->m; b++) w->U[a][b] = 0; }
 }
 
 /* -fb: every pair eliminated at this node by z + U stays forbidden below it (for any
@@ -2020,6 +2044,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dom2")) opt_dom = 2;
         else if (!strcmp(argv[a], "-sens")) opt_sens = 1;
         else if (!strcmp(argv[a], "-umax")) opt_umax = 1;
+        else if (!strcmp(argv[a], "-dual")) { opt_dual = argv[++a]; atexit(print_dual); }
+        else if (!strcmp(argv[a], "-dualmin")) opt_dualmin = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-glbpre")) { opt_glbpre = atoi(argv[++a]); atexit(print_glb); }
         else if (!strcmp(argv[a], "-fixorder")) opt_fixorder = 1;
         else if (!strcmp(argv[a], "-topd")) opt_topd = atoi(argv[++a]);
@@ -2062,6 +2088,15 @@ int main(int argc, char **argv) {
         for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) C0[i][j] = -(d[i] * dB[j] + dA[i] * g[j] + d[i] * g[j]);
         for (int i = 0; i < N; i++) { A[i][i] += d[i]; B[i][i] += g[i]; }
     }
+    if (opt_dual) {
+        FILE *f = fopen(opt_dual, "r"); double d[NMAX], g[NMAX];
+        for (int i = 0; i < N; i++) if (fscanf(f, "%lf", &d[i]) != 1) exit(4);
+        for (int i = 0; i < N; i++) if (fscanf(f, "%lf", &g[i]) != 1) exit(4);
+        fclose(f);
+        memcpy(A2, A, sizeof A2); memcpy(B2, B, sizeof B2);
+        for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) C02[i][j] = C0[i][j] - (d[i] * B[j][j] + A[i][i] * g[j] + d[i] * g[j]);
+        for (int i = 0; i < N; i++) { A2[i][i] += d[i]; B2[i][i] += g[i]; }
+    }
     g_ub = INFINITY; report_solution(p, hv, -1);
     if (!isnan(ub0) && ub0 < g_ub) g_ub = ub0;     /* external bound (e.g. known optimum + 1) */
     if (!strcmp(mode, "tabu")) { printf("{\"tabu\":%.0f,\"t\":%.2f}\n", hv, t_heur); return 0; }
@@ -2081,6 +2116,8 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(mode, "root")) {
         work_t *w = calloc(1, sizeof(work_t)); node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;   /* FIX="i:j i:j ...": evaluate that node */
+            while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
         eval_t ev; double t = now();
         double save = g_ub; g_ub = INFINITY;
         eval_node(&nd, w, &ev, opt_nfw, opt_nfw, 0); g_ub = save;
