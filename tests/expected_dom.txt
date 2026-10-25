@@ -1,0 +1,7 @@
+# instance optimum found nodes fw_iters, with exchange dominance (-dom), strategy C, ub = opt+1
+nug12 578 578 138 46536
+nug14 1014 1014 1827 417527
+nug15 1150 1150 1922 187817
+nug16a 1610 1610 7526 542099
+nug16b 1240 1240 4035 265409
+nug17 1732 1732 40520 1614020

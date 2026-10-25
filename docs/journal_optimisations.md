@@ -98,6 +98,59 @@ Lecture (tendance : croît pour A5 et B3, stable pour A1, A4, A6, B1, décroît 
 - Stratégie D sur nug20 : code de 2000 717,7 s, code actuel 89,5 s (× 8,0), dont B2 × 1,98 ; la stratégie C reste plus rapide en temps absolu (76,9 s).
 - Nombre de nœuds, code actuel / code de 2000 : nug14 0,75 ; nug15 0,92 ; nug16a 0,96 ; nug16b 0,99 ; nug17 1,02 ; nug20 1,08 ; nug22 0,94.
 
+## Chantier C : coupes sans changer de borne (nuit du 24 au 25 octobre)
+
+Objectif fixé par Jean-Pierre : battre le temps de l'arbre RLT2 de Gonçalves et al. (nug30, 103 380 nœuds, 88 867 s avec un GPU) en gardant QPB. Point de départ : l'estimation de l'arbre de nug30 en stratégie D vaut 1,6 à 2,5 × 10¹⁰ nœuds, soit 5 à 6 × 10⁶ s sur un cœur (environ 15 jours sur 4 cœurs) ; il manque un facteur 15 environ.
+
+### Profil de l'arbre de nug30 par profondeur (graine 19, `-top 3`, 6 120 plongées)
+
+Estimation 1,62 × 10¹⁰ nœuds, 5,18 × 10⁶ s. Par niveau (nœuds estimés, temps, part des nœuds élagués après évaluation) :
+
+| Niveau | m | Nœuds | Temps (s) | Élagués après FW |
+|---|---|---|---|---|
+| 4 | 26 | 1,6 × 10⁵ | 12 500 | 4 % |
+| 5 | 25 | 3,2 × 10⁶ | 2 100 | 18 % |
+| 6 | 24 | 5,3 × 10⁷ | 26 000 | 46 % |
+| 7 | 23 | 4,6 × 10⁸ | 196 000 | 65 % |
+| 8 | 22 | 2,5 × 10⁹ | 760 000 | 81 % |
+| 9 | 21 | 4,7 × 10⁹ | 1 280 000 | 78 % |
+| 10 | 20 | 7,3 × 10⁹ | 2 700 000 | 95 % |
+| 11 | 19 | 1,2 × 10⁹ | 200 000 | 100 % |
+
+Lecture : la moitié du temps va aux nœuds du niveau 10, presque tous élagués dès leur évaluation. Sur nug20 (stratégie C, avec la coupe C2 ci-dessous), un nœud élagué coûte 6,4 itérations de FW en moyenne et un nœud qui se sépare 40 ; les nœuds élagués sont nombreux mais bon marché.
+
+### C1. Paires interdites héritées (sans gain)
+- Principe : au nœud, pour toute permutation P du sous-arbre, coût(P) ≥ z + ⟨U, P⟩ avec U ≥ 0. Si z + U_ab dépasse le seuil, aucune permutation du sous-arbre ne contient (a, b) : le couple reste interdit chez tous les descendants. Dans le LAP de FW, le coût des couples interdits passe à 10¹² ; la borne reste valide car f(P) ≥ f(X) − ⟨G, X⟩ + ⟨G′, P⟩ ≥ f(X) − ⟨G, X⟩ + LAP(G′) pour toute permutation P qui évite ces couples, X pouvant être n'importe où.
+- Mesure : optimums retrouvés de nug12 à nug18, nœuds à ±0,5 %. Les couples interdits avaient déjà un grand coût réduit, le LAP les évitait de lui-même.
+
+### C2. Dominance par échange (`-dom`) : nug22 × 1,97
+- Principe : soient deux installations placées i → j et k → l. Échanger leurs emplacements change le coût de toute complétion p de
+  Δ = (A_ii − A_kk)(B_ll − B_jj) + C0_il + C0_kj − C0_ij − C0_kl + 2 Σ_{t placée, t ≠ i, k} (A_it − A_kt)(B_{l p(t)} − B_{j p(t)}) + 2 Σ_{t libre} α_t β_{p(t)},
+  avec α_t = A_it − A_kt et β_c = B_lc − B_jc. La dernière somme est une affectation de coût de rang un : son maximum sur les complétions s'obtient en rangeant α et β dans le même ordre (inégalité de réarrangement), en O(m log m). Si même ce maximum laisse Δ < 0, toute permutation du sous-arbre est strictement améliorée par l'échange.
+- Validité : une permutation optimale n'est jamais strictement améliorée, donc aucun sous-arbre coupé ne contient de permutation optimale. Avec la coupe par la borne et la réduction par symétrie : l'orbite d'une permutation optimale est faite de permutations optimales, aucune n'est coupée par dominance, et la symétrie en garde au moins une.
+- Coût : d(d − 1)/2 paires par nœud au niveau d, deux tris de m nombres chacune (tri par insertion, plus rapide que qsort ici).
+- Mesures (stratégie C, ub = opt + 1, un cœur, machine chargée à 4 ou 5 calculs ; depuis le redémarrage de 23 h 26 UTC la machine est un Xeon à 2,8 GHz avec AVX-512, les temps ne se comparent donc pas à ceux des sections précédentes ; les nombres de nœuds sont les mêmes, seuls les nombres d'itérations de FW bougent un peu avec le processeur) :
+
+| Instance | Nœuds sans | Nœuds avec | Temps sans | Temps avec |
+|---|---|---|---|---|
+| nug16a | 10 746 | 7 526 | 2,27 s | 1,94 s |
+| nug17 | 57 085 | 40 520 | 7,4 s | 6,1 s |
+| nug18 | 202 854 | 164 176 | 21,5 s | 19,1 s |
+| nug20 | 992 813 | 982 633 | 79,3 s | 76,6 s |
+| nug22 | 1 908 513 | 928 329 | 160,4 s | 81,3 s |
+
+  Le gain dépend de l'instance : fort sur nug22 (grille 2 × 11), presque nul sur nug20 (grille 4 × 5).
+- Je n'ai pas trouvé cette règle dans les sources lues cette nuit ; la recherche n'a pas été exhaustive.
+
+### C2 bis à C2 quinquies : variantes de la dominance (sans gain)
+| Variante | Idée | Résultat |
+|---|---|---|
+| Installation placée contre emplacement libre (`-dom2`) | i → j placée, emplacement libre l : quel que soit le libre t qui prend l, i va en l et t en j ; même formule de rang un, à vérifier pour tout t | nœuds identiques à `-dom` sur nug12 à nug17, temps + 50 % |
+| Borne et échange mêlés (`-domlb`) | pour λ ∈ {0,3 ; 0,5 ; 0,7} : si min_P λ(z + ⟨U, P⟩ − seuil) − (1 − λ)(D + ⟨W, P⟩) > 0, toute P dépasse le seuil ou est améliorée ; un LAP par paire et par λ | 64 nœuds de plus coupés sur nug17, plus lent |
+| Couverture par plusieurs échanges (`-domcov k`) | combinaison convexe de tous les échanges et de la borne, poids par montée de sous-gradient exponentiée, un LAP par pas | k = 20 : nug17 40 257 nœuds au lieu de 40 520, temps × 1,5 |
+| Cycles de trois installations placées (`-dom3`) | partie libre de rang deux, majorée par la somme de deux maximums de rang un | nug17 −2 % de nœuds, nug18 −0,3 %, plus lent |
+| Filtrage des enfants dominés au moment de séparer (`-dombr`) | les enfants dominés ne comptent plus dans la règle 2 | nug17 35 881 nœuds, nug18 149 529, mais temps égal ou supérieur |
+
 ## Profil du code actuel (nug20, 24 octobre 20 h 30 UTC)
 
 gprof, LAP et A·P·B non incorporés : LAP par plus courts chemins 56 %, A·P·B incrémental 16 %, évaluation du nœud 7 %, corps de Frank-Wolfe 6 %, produits de matrices (point de départ hérité) 5 %, LAP de mise en place 4 %, valeurs propres 4 %. Par appel du LAP : m = 14,0 en moyenne, 5,4 lignes libres après l'affectation gloutonne, 5,4 colonnes balayées par ligne libre.
