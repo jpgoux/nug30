@@ -204,3 +204,9 @@ nug30 a demandé 6,94 années de HP C3000, soit 94 à 127 jours sur un cœur de 
 - Décalages optimisés nœud par nœud (pour PB, par Powell, puis QPB à 150 itérations ; mesure hors solveur, mode `root` avec `FIX`) : nug20, 60 nœuds de la frontière de profondeur 3, médiane 9 % de l'écart au seuil comblé, 3 nœuds élagués de plus (poids 10⁻⁵ de l'arbre) ; à la profondeur 6, médiane −3 % (les décalages bons pour PB dégradent QPB). Piste abandonnée.
 - nug24 stratégie D sans dom, nouvelle machine : 22 784 046 nœuds, 2 163 s. Avec `-dom` : 21 242 561 nœuds (−6,8 %), 2 663 s, mais mesuré sous une charge plus forte ; pas de gain de temps établi.
 - Les estimations nug30 du code de 2000 (graines 7 et 11) ont été perdues au redémarrage de la machine vers 85 % ; relancées à 5 h UTC.
+
+### Sensibilité de l'arbre à la borne (25 octobre, 9 h UTC)
+Seuil abaissé de δ (équivaut à une borne meilleure de δ à chaque nœud), stratégie C, nœuds : nug20 (écart racine 316) δ = 0 : 992 813 ; 8 : 699 696 ; 16 : 471 317 ; 32 : 211 104 ; 64 : 38 091 (× 26). nug22 (écart racine 547) : 1 908 513 ; 1 501 441 ; 1 144 215 ; 661 216 ; 226 366 (× 8,4). Un facteur × 16 demande environ +50 par nœud sur nug20.
+
+### Borne de Mittelmann et Peng aux nœuds (exploration en Python, Clarabel)
+Racine retrouvée (nug12 509, nug20 2 298). Aux nœuds de la frontière de profondeur 3 de nug20 : modèle (31) plus faible que QPB de 80 à 100 ; modèle (27) avec relèvement, médiane −5 par rapport à QPB, aucun nœud élagué en plus. Le gain de la racine ne tient pas quand le terme linéaire des affectations fixées apparaît.
