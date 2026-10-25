@@ -210,3 +210,6 @@ Seuil abaissé de δ (équivaut à une borne meilleure de δ à chaque nœud), s
 
 ### Borne de Mittelmann et Peng aux nœuds (exploration en Python, Clarabel)
 Racine retrouvée (nug12 509, nug20 2 298). Aux nœuds de la frontière de profondeur 3 de nug20 : modèle (31) plus faible que QPB de 80 à 100 ; modèle (27) avec relèvement, médiane −5 par rapport à QPB, aucun nœud élagué en plus. Le gain de la racine ne tient pas quand le terme linéaire des affectations fixées apparaît.
+
+### Hybride QPB + RLT2 aux nœuds (25 octobre, 10 h 30 UTC)
+nug22, frontière de profondeur 4 (9 438 nœuds ; les 200 plus gros sous-arbres portent 64 % de l'arbre). RLT2 (30 itérations) sur les 99 plus gros : 73 élagués, soit 474 307 nœuds QPB évités, qui coûtaient 22,7 s de QPB ; RLT2 a coûté 605 s. Perte × 27 sur notre CPU ; même au rythme du GPU de Gonçalves et al. (environ 7 fois plus rapide par nœud), perte × 4. À la profondeur 2 de nug20 : 19 nœuds sur 60 élagués, 4,6 % de l'arbre, 372 s contre 60 s pour toute la résolution QPB.
