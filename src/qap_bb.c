@@ -39,9 +39,19 @@ static int opt_nbest = 30, opt_nfw3 = 30;
 static double opt_q = 0.0;
 static int opt_intprune = 1;
 static int opt_fb = 0;
+static int opt_umax = 0;
+static int opt_glbpre = -1; static long g_glbcalls = 0, g_glbfath = 0;
+static int opt_fixorder = 0;
+static int opt_topd = -1; static double opt_topx = 1;   /* -topd d -topx x: x times more FW iterations down to depth d */
+static double opt_r2p = 0;   /* -r2p p: rule 2 weighs each surviving child by its relative gap to the power p (0: count, as in 2001) */
+static int opt_ext = 0, opt_extn = 1; static double opt_extd = 0; static __thread int tl_noext = 0;
+static int g_timeig = 0; static double g_teig_tot = 0; static long g_emiss = 0, g_ehit = 0;
+static void print_teig(void) { if (g_timeig) fprintf(stderr, "eig: %.2f s in %ld decompositions, %ld cache hits\n", g_teig_tot, g_emiss, g_ehit); }   /* -umax: child bounds from the best iteration for each child, not only the best iteration overall */
 static int opt_dom = 0;   /* -dom: prune a node whose partial assignment is improved by swapping two fixed facilities, whatever the completion */
 static long g_dom_pruned = 0;
-static long g_fwstat[2][2];   /* serial search: [fathomed][count, FW iterations] of the nodes evaluated */
+static long g_fwstat[2][2]; static int g_gapstat = 0; static long g_gaph[2][7];
+static void print_glb(void) { if (opt_glbpre >= 0) fprintf(stderr, "glb: %ld calls, %ld fathomed\n", g_glbcalls, g_glbfath); }
+static void print_gap(void) { if (!g_gapstat) return; for (int h = 0; h < 2; h++) { fprintf(stderr, "branching nodes with f(X) %s thr, gap thr - z in <1, <2, <5, <10, <20, <50, more:", h ? ">=" : "<"); for (int b = 0; b < 7; b++) fprintf(stderr, " %ld", g_gaph[h][b]); fputc('\n', stderr); } }   /* serial search: [fathomed][count, FW iterations] of the nodes evaluated */
 static int opt_dombr = 0;   /* -dombr: also drop dominated children when branching (and count them out in rule 2) */   /* -fb: pairs eliminated by z + U at a node stay forbidden in its subtree */
 #define FBIG 1e12   /* integer data: prune if bound > ub - 1 (else bound >= ub) */
 
@@ -539,6 +549,10 @@ typedef struct {
     int x0_ok; double X0[NMAX][NMAX];   /* Frank-Wolfe starting point inherited from the parent */
     struct pfw_s *pa;                   /* active set of the pairwise Frank-Wolfe */
     int nfb; unsigned char fbl[NMAX][NMAX];   /* forbidden pairs of the node, local indices */
+    int Up[NMAX], up_ok;                /* assignment of the LAP behind U (row a -> column Up[a]) */
+    double Wmax[NMAX][NMAX];            /* -umax: max over the FW iterations of z_k + U_k */
+    double teig;                        /* -timeig: seconds in the spectral decompositions */
+    double flast;                       /* f(X) + K at the end of the last Frank-Wolfe run */
 } work_t;
 
 /* Pairwise Frank-Wolfe (Lacoste-Julien and Jaggi): X is kept as a convex
@@ -624,10 +638,12 @@ static int opt_ecache = 1, opt_memo = 1;
 static const eig_t *get_eig(work_t *w, eig_t *tab, unsigned mask, int m, const double M[NMAX][NMAX]) {
     unsigned h = (mask * 2654435761u) >> 23;   /* 9 bits */
     eig_t *e = &tab[h & (ECACHE - 1)];
-    if (opt_ecache && e->m == m && e->mask == mask) { w->hits++; return e; }
+    if (opt_ecache && e->m == m && e->mask == mask) { w->hits++; g_ehit++; return e; }
     w->miss++;
     double W[NMAX][NMAX]; int k = m - 1;
+    double t0 = g_timeig ? now() : 0;
     proj_eig(m, M, e->lam, W);
+    if (g_timeig) { w->teig += now() - t0; g_teig_tot += now() - t0; g_emiss++; }
     for (int i = 0; i < m; i++) for (int j = 0; j < k; j++) {
         double t = 0; for (int l = 0; l < k; l++) t += Vb[m][i][l] * W[l][j]; e->VW[i][j] = t; }
     e->mask = mask; e->m = m;
@@ -820,7 +836,12 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     double best = -INFINITY, u[NMAX], v[NMAX];
     int p[NMAX];
     double hist_best_at[8]; int it;
-    for (it = 0; it < nfw; it++) {
+    int nfwc = nfw;
+    for (it = 0; it < nfwc; it++) {
+        /* -ext k d: at the last allowed iteration, if f(X) is still above the target (the node may
+         * still be fathomed) and the bound is within d of it, allow k more iterations, up to
+         * opt_extn times; any iteration count gives a valid bound */
+        if (opt_ext && !tl_noext && it == nfwc - 1 && nfwc < nfw + opt_ext * opt_extn && f + K >= target && target - best < opt_extd) nfwc += opt_ext;
         if (!opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
         double lapv, gp = NAN;   /* gp: <G, P> when the LAP is approximate */
         /* -fb: forbidden pairs get cost FBIG in the LAP only. For every permutation P of the
@@ -855,9 +876,15 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         double gx = opt_fuse ? 2 * (f - w->trST - s2) + s2 : dotm(m, w->G, w->X);
         if (ns && !opt_fuse) gx += gx0;
         double z = f - gx + lapv + K;
+        if (opt_umax && isnan(gp)) {   /* -umax: z_k + U_k[a][b] bounds every child (a, b) at each iteration k: keep the max */
+            if (best == -INFINITY) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->Wmax[i][j] = -INFINITY;
+            for (int i = 0; i < m; i++) { const double *g = w->G[i]; double *wm = w->Wmax[i], zu = z - u[i];
+                for (int j = 0; j < m; j++) { double t = zu + g[j] - v[j]; if (t > wm[j]) wm[j] = t; } }
+        }
         if (z > best && isnan(gp)) {   /* U from exact LAP duals only */
             best = z;
             for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->U[i][j] = w->G[i][j] - u[i] - v[j];
+            memcpy(w->Up, p, sizeof(int) * m); w->up_ok = 1;
             /* shift: we store z without K? no: z includes K */
         }
         if (ns) { int k = 0; for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) if (w->fbl[i][j]) w->G[i][j] = gsave[k++]; }
@@ -963,7 +990,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     }
     (void)hist_best_at;
     static int trace = -1; if (trace < 0) trace = getenv("QPB_TRACE") != NULL;
-    w->nfw += it; if (trace) fprintf(stderr, "f(X)=%.3f z=%.3f\n", f + K, best);
+    w->nfw += it; w->flast = f + K; if (trace) fprintf(stderr, "f(X)=%.3f z=%.3f\n", f + K, best);
     return best;
 }
 
@@ -1308,8 +1335,24 @@ static void eval_node(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2
         if (c < g_ub) { int p[NMAX]; for (int i = 0; i < N; i++) p[i] = nd->rc[i]; if (m == 1) p[ev->F[0]] = ev->L[0]; report_solution(p, c, who); }
         return;
     }
+    if (opt_topd >= 0 && nd->depth <= opt_topd && !tl_noext) { nfw = (int)(nfw * opt_topx); nfw2 = (int)(nfw2 * opt_topx); }
+    if (opt_glbpre >= 0 && nd->depth >= opt_glbpre && m > 2) {
+        /* -glbpre d: Gilmore-Lawler bound first, from depth d on. For a completion p of the node,
+         * sum_{a,c free} Ar_ac Br_{p(a)p(c)} >= sum_a [Ar_aa Br_{p(a)p(a)} + minprod(Ar_a., Br_{p(a).})],
+         * minprod pairing the off-diagonal entries in opposite orders, so
+         * cost >= K + LAP(Cr + L). Cheap (m^3 plus one LAP); if it fathoms, Frank-Wolfe is skipped. */
+        double ra[NMAX][NMAX], rb[NMAX][NMAX], Lc[NMAX][NMAX], uu[NMAX + 1], vv[NMAX + 1]; int rs[NMAX];
+        for (int a = 0; a < m; a++) { int n2 = 0; for (int c = 0; c < m; c++) if (c != a) ra[a][n2++] = w->Ar[a][c]; isort(ra[a], m - 1);
+            n2 = 0; for (int c = 0; c < m; c++) if (c != a) rb[a][n2++] = w->Br[a][c]; isort(rb[a], m - 1); }
+        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double t = w->Ar[a][a] * w->Br[b][b] + w->Cr[a][b];
+            for (int k = 0; k < m - 1; k++) t += ra[a][k] * rb[b][m - 2 - k]; Lc[a][b] = t; }
+        double g = K + lap(m, Lc, rs, uu, vv); g_glbcalls++;
+        if (g > target) { ev->z = g; w->x0_ok = 0; g_glbfath++; for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) w->U[a][b] = 0; return; }
+    }
     double ubf = INFINITY; int bp[NMAX];
+    w->up_ok = 0;
     ev->z = qpb_fw(w, m, K, target, nfw, nfw2, &ubf, bp);
+    if (opt_umax && ev->z > -INFINITY) for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double t = w->Wmax[a][b] - ev->z; if (t > w->U[a][b]) w->U[a][b] = t; }
     if (w->nfb) {   /* forbidden pairs: reduced cost FBIG, shown to the branching rules as just eliminated */
         double cap = fmax(0, target - ev->z) + 1;
         for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) if (w->fbl[a][b] && w->U[a][b] > cap) w->U[a][b] = cap;
@@ -1350,14 +1393,50 @@ static int cmp_child(const void *a, const void *b) {
 
 /* choose branching and produce children (sorted by bound estimate).
  * Returns number of children. */
+/* -sens: sharper elimination from the same LAP. U >= 0 is the reduced cost matrix of an optimal
+ * assignment p* (U[i][p*(i)] = 0), and cost(P) >= z + <U, P>. Over the permutations with
+ * P_ab = 1 the minimum of <U, P> is U_ab plus the shortest alternating path that sends the row
+ * r = p*^-1(b), which lost its column, to the column p*(a) that a left free: row i -> column j
+ * costs U_ij, column j -> its row under p* costs 0. One Dijkstra towards each column p*(a)
+ * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
+ * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
+ * use U only through such single-pair bounds and sums of them). */
+static int opt_sens = 0;
+static void sharpen_U(work_t *w, int m) {
+    if (!w->up_ok) return;
+    int inv[NMAX]; for (int a = 0; a < m; a++) inv[w->Up[a]] = a;
+    double S[NMAX][NMAX];
+    for (int a = 0; a < m; a++) {
+        int c = w->Up[a];
+        double D[NMAX], d[NMAX]; char done[NMAX];   /* D: column labels, d: row labels */
+        for (int j = 0; j < m; j++) { D[j] = INFINITY; done[j] = 0; }
+        for (int i = 0; i < m; i++) d[i] = INFINITY;
+        D[c] = 0;
+        for (int it = 0; it < m; it++) {
+            int jm = -1; double mn = INFINITY;
+            for (int j = 0; j < m; j++) if (!done[j] && D[j] < mn) { mn = D[j]; jm = j; }
+            if (jm < 0) break;
+            done[jm] = 1;
+            for (int i = 0; i < m; i++) {
+                double t = w->U[i][jm] + mn;
+                if (t < d[i]) { d[i] = t; int j2 = w->Up[i]; if (!done[j2] && t < D[j2]) D[j2] = t; }
+            }
+        }
+        for (int b = 0; b < m; b++) S[a][b] = w->U[a][b] + (b == c ? 0 : d[inv[b]]);
+    }
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) w->U[a][b] = S[a][b];
+    w->up_ok = 0;
+}
+
 static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who) {
+    if (opt_sens) sharpen_U(w, ev->m);
     int m = ev->m; double z = ev->z, thr = prune_thr(g_ub);
     static __thread int idxA[GMAX], idxB[GMAX];
     int nA = opt_sym ? stab(&GA, nd->rc, idxA) : 1;   /* acts on rows: reduces column branching */
     int nB = opt_sym ? stab(&GB, nd->cr, idxB) : 1;   /* acts on columns: reduces row branching */
     /* effective U with orbit max (if an element of an orbit is eliminated, the whole orbit is) */
     /* row branching: fix row a, children over columns b (orbits of GB stabilizer on columns) */
-    int best_kind = -1, best_line = -1, best_cnt = 1 << 30; double best_sum = -1;
+    int best_kind = -1, best_line = -1, best_cnt = 1 << 30; double best_sum = -1; double best_sc = INFINITY;
     static __thread unsigned char domc[NMAX][NMAX];
     if (opt_dombr) dominated_children(nd, ev, domc); else memset(domc, 0, sizeof domc);
     int allow_row = 1, allow_col = 1;
@@ -1388,14 +1467,19 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
     }
     if (allow_row) for (int a = 0; a < m; a++) {
         int cnt = 0; double s = 0;
-        for (int b = 0; b < m; b++) if (repCol[b]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) cnt++; s += Ueff[a][b]; }
-        if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 0; best_line = a; }
+        double sc = 0;
+        for (int b = 0; b < m; b++) if (repCol[b]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) { cnt++; if (opt_r2p > 0) sc += pow((thr - z - Ueff[a][b]) / (thr - z + 1e-9), opt_r2p); } s += Ueff[a][b]; }
+        if (opt_r2p > 0) { if (sc < best_sc || (sc == best_sc && s > best_sum)) { best_sc = sc; best_cnt = cnt; best_sum = s; best_kind = 0; best_line = a; } }
+        else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 0; best_line = a; }
     }
     if (allow_col) for (int b = 0; b < m; b++) {
         int cnt = 0; double s = 0;
-        for (int a = 0; a < m; a++) if (repRow[a]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) cnt++; s += Ueff[a][b]; }
-        if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; }
+        double sc = 0;
+        for (int a = 0; a < m; a++) if (repRow[a]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) { cnt++; if (opt_r2p > 0) sc += pow((thr - z - Ueff[a][b]) / (thr - z + 1e-9), opt_r2p); } s += Ueff[a][b]; }
+        if (opt_r2p > 0) { if (sc < best_sc || (sc == best_sc && s > best_sum)) { best_sc = sc; best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; } }
+        else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; }
     }
+    if (opt_fixorder) { best_kind = 0; best_line = 0; }   /* -fixorder: lowest free row, for bound comparisons */
     /* Rules 3 and 4 (Brixius-Anstreicher 2001): prospective bounds on the
      * NBEST rows and NBEST columns with the largest sums of U (Rule 1 order). */
     const rule_t *R = rule_at(nd->depth);
@@ -1404,7 +1488,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_lanb; Rsz.nfw3 = opt_lanfw; R = &Rsz;
     }
     double zpro[NMAX]; int have_pro = 0;
-    if ((R->rule == 3 || R->rule == 4) && m > 2) {
+    if ((R->rule == 3 || R->rule == 4) && m > 2 && !opt_fixorder) {
         typedef struct { int kind, line; double s; } cand_t;
         cand_t rows[NMAX], cols[NMAX], cands[2 * NMAX]; int nr = 0, ncl = 0, nc = 0;
         if (allow_row) for (int a = 0; a < m; a++) { double s = 0; for (int b = 0; b < m; b++) if (repCol[b]) s += Ueff[a][b]; rows[nr++] = (cand_t){0, a, s}; }
@@ -1455,7 +1539,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 else {
                     node_t chn = *nd; chn.rc[ev->F[a]] = ev->L[b]; chn.cr[ev->L[b]] = ev->F[a]; chn.depth++;
                     if (opt_warm & 1) inherit_x(w2, w->X, m, a, b);
-                    eval_t e2; eval_node(&chn, w2, &e2, R->nfw3, R->nfw3, who);
+                    eval_t e2; tl_noext = 1; eval_node(&chn, w2, &e2, R->nfw3, R->nfw3, who); tl_noext = 0;
                     w2->x0_ok = 0;
                     zij = fmax(e2.z, z + Ueff[a][b]);
                     if (R->rule == 4 && e2.m > 1) {
@@ -1544,7 +1628,9 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     double t = now(); long fw0 = w->nfw;
     { const rule_t *R = rule_at(nd->depth); eval_node(nd, w, &ev, R->nfw1, R->nfw2, who); }
     st->t_bound += now() - t;
-    if (ev.m > 1) { int f = ev.z > prune_thr(g_ub); g_fwstat[f][0]++; g_fwstat[f][1] += w->nfw - fw0; }
+    if (ev.m > 1) { int f = ev.z > prune_thr(g_ub); g_fwstat[f][0]++; g_fwstat[f][1] += w->nfw - fw0;
+        if (!f && g_gapstat) { double thr = prune_thr(g_ub), g = thr - ev.z; int hi = w->flast >= thr; int b = g < 1 ? 0 : g < 2 ? 1 : g < 5 ? 2 : g < 10 ? 3 : g < 20 ? 4 : g < 50 ? 5 : 6;
+            g_gaph[hi][b]++; } }
     st->nodes++; st->nodes_depth[nd->depth]++;
     g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0) write_progress(0);
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
@@ -1932,6 +2018,17 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-fb")) opt_fb = 1;
         else if (!strcmp(argv[a], "-dom")) opt_dom = 1;
         else if (!strcmp(argv[a], "-dom2")) opt_dom = 2;
+        else if (!strcmp(argv[a], "-sens")) opt_sens = 1;
+        else if (!strcmp(argv[a], "-umax")) opt_umax = 1;
+        else if (!strcmp(argv[a], "-glbpre")) { opt_glbpre = atoi(argv[++a]); atexit(print_glb); }
+        else if (!strcmp(argv[a], "-fixorder")) opt_fixorder = 1;
+        else if (!strcmp(argv[a], "-topd")) opt_topd = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-topx")) opt_topx = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-r2p")) opt_r2p = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-ext")) { opt_ext = atoi(argv[++a]); opt_extd = atof(argv[++a]); }
+        else if (!strcmp(argv[a], "-extn")) opt_extn = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-gapstat")) { g_gapstat = 1; atexit(print_gap); }
+        else if (!strcmp(argv[a], "-timeig")) { g_timeig = 1; atexit(print_teig); }
         else if (!strcmp(argv[a], "-dom3")) opt_dom = 3;
         else if (!strcmp(argv[a], "-domlb")) opt_dom = opt_domlb = 1;
         else if (!strcmp(argv[a], "-domcov")) { opt_dom = 1; opt_domcov = atoi(argv[++a]); }
@@ -1968,6 +2065,20 @@ int main(int argc, char **argv) {
     g_ub = INFINITY; report_solution(p, hv, -1);
     if (!isnan(ub0) && ub0 < g_ub) g_ub = ub0;     /* external bound (e.g. known optimum + 1) */
     if (!strcmp(mode, "tabu")) { printf("{\"tabu\":%.0f,\"t\":%.2f}\n", hv, t_heur); return 0; }
+    if (getenv("GLBMIX")) {   /* experiment: bound lambda * QPB(A, B, C0 + (1 - lambda)/lambda L), L the Gilmore-Lawler linear minorant */
+        double lam = atof(getenv("GLBMIX"));
+        for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) {
+            double a[NMAX], b[NMAX]; int na = 0, nb = 0;
+            for (int k = 0; k < N; k++) if (k != i) a[na++] = A[i][k];
+            for (int l = 0; l < N; l++) if (l != j) b[nb++] = B[j][l];
+            isort(a, na); isort(b, nb);
+            double mp = 0; for (int t = 0; t < na; t++) mp += a[t] * b[na - 1 - t];
+            double Lij = A[i][i] * B[j][j] + mp;
+            C0[i][j] = lam * C0[i][j] + (1 - lam) * Lij;
+        }
+        for (int i = 0; i < N; i++) for (int k = 0; k < N; k++) A[i][k] *= lam;
+        if (lam == 0) { /* GLB itself: LAP of L */ }
+    }
     if (!strcmp(mode, "root")) {
         work_t *w = calloc(1, sizeof(work_t)); node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
         eval_t ev; double t = now();

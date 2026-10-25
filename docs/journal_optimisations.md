@@ -190,3 +190,13 @@ Même code (celui de 2000), même instance, un cœur. Temps de l'article : OMS 2
 | nug24 (D) | 11,0 | 0,48 | × 23,0 (23,2 M nœuds en 3 h 05, optimum 3 488) |
 
 nug30 a demandé 6,94 années de HP C3000, soit 94 à 127 jours sur un cœur de 2026, 24 à 32 jours sur 4 cœurs. Objectif retenu : × 30 par le code et l'algorithme.
+
+### Suite de la nuit (01 h UTC, 25 octobre) : essais sans gain, en bref
+- `-sens` (élimination par chemin alternant), `-umax`, `-ext`, `-r2p`, `-topd`, `GLBMIX`, `-dom2/-dom3/-domlb/-domcov` : au plus −5 % de nœuds, jamais de gain de temps net.
+- `-glbpre 0` (Gilmore-Lawler avant Frank-Wolfe) : nug18, 195 nœuds élagués sur 388 438 appels ; inutile.
+- Découpage de la distance de Manhattan par axe, sans couplage : nug30 5 034 contre 5 363 ; moins bon.
+- SDP et reformulation convexe (QCR) à la racine seule (exploration en Python, hors du solveur) : nug12 529 contre 482 à la racine, mais arbre plus gros (34 442 nœuds contre 6 087).
+- Décalages diagonaux de la racine (code actuel) : racine nug30 5 499 contre 5 349, mais nug18 392 210 nœuds contre 202 854.
+- nug24 stratégie D avec `-dom` : 21 242 561 nœuds, 2 663 s (référence sans dom sur la nouvelle machine en cours).
+- Estimations nug30 (graine 19) : 1,62 × 10¹⁰ nœuds sans dom, 1,74 × 10¹⁰ avec ; seuil de preuve ub = opt (graine 23) : 2,25 × 10¹⁰. Différences dans le bruit de l'estimateur.
+- Bilan de la littérature par brique : `docs/litterature_par_brique.md`.
