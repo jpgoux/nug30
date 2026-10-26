@@ -546,6 +546,7 @@ typedef struct {
     const eig_t *eA, *eB;               /* spectral data of the node, for the S, T update */
     double sd[NMAX], td[NMAX];          /* current dual vectors: Sp = VW_A diag(sd) VW_A^T, Tp likewise */
     long nlap, nfw, nupd;
+    int eperm[NMAX], eperm_best[NMAX]; unsigned eused;   /* -enum */
     int x0_ok; double X0[NMAX][NMAX];   /* Frank-Wolfe starting point inherited from the parent */
     struct pfw_s *pa;                   /* active set of the pairwise Frank-Wolfe */
     int nfb; unsigned char fbl[NMAX][NMAX];   /* forbidden pairs of the node, local indices */
@@ -1293,6 +1294,22 @@ static int domcov(const node_t *nd, const eval_t *ev, const work_t *w) {
     return 0;
 }
 
+static int opt_enum = 0; static long g_enum_nodes = 0;
+/* depth-first over the completions, facility a to location b; the partial cost is a lower bound
+ * when every entry of A, B and C0 is nonnegative (checked at start, -enum refused otherwise) */
+static void enum_rec(work_t *w, int m, int a, double cost, double cut, double *best, const int *L) {
+    if (a == m) { if (cost < *best) { *best = cost; memcpy(w->eperm_best, w->eperm, sizeof(int) * m); } return; }
+    double lim = *best < cut ? *best : cut;
+    for (int b = 0; b < m; b++) if (!(w->eused >> b & 1)) {
+        double c = cost + w->Cr[a][b] + w->Ar[a][a] * w->Br[b][b];
+        for (int c2 = 0; c2 < a; c2++) c += w->Ar[a][c2] * w->Br[b][w->eperm[c2]] + w->Ar[c2][a] * w->Br[w->eperm[c2]][b];
+        if (c >= lim) continue;
+        w->eperm[a] = b; w->eused |= 1u << b; enum_rec(w, m, a + 1, c, cut, best, L); w->eused &= ~(1u << b);
+        lim = *best < cut ? *best : cut;
+    }
+    (void)L;
+}
+
 static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
     int m = 0, mc = 0;
     w->maskF = w->maskL = 0;
@@ -1333,6 +1350,13 @@ static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw
         double c = K + (m == 1 ? w->Ar[0][0] * w->Br[0][0] + w->Cr[0][0] : 0);
         ev->z = c; if (m == 1) w->U[0][0] = 0;
         if (c < g_ub) { int p[NMAX]; for (int i = 0; i < N; i++) p[i] = nd->rc[i]; if (m == 1) p[ev->F[0]] = ev->L[0]; report_solution(p, c, who); }
+        return;
+    }
+    if (m <= opt_enum) {   /* -enum k: nodes with at most k free facilities are solved by enumeration, the node is closed */
+        double best = INFINITY; w->eused = 0; enum_rec(w, m, 0, K, target < g_ub ? g_ub : target, &best, ev->L);
+        if (best < g_ub) { int p[NMAX]; for (int i = 0; i < N; i++) p[i] = nd->rc[i]; for (int a2 = 0; a2 < m; a2++) p[ev->F[a2]] = ev->L[w->eperm_best[a2]]; report_solution(p, best, who); }
+        ev->z = INFINITY; w->x0_ok = 0; __atomic_fetch_add(&g_enum_nodes, 1, __ATOMIC_RELAXED);
+        for (int a2 = 0; a2 < m; a2++) for (int b = 0; b < m; b++) w->U[a2][b] = 0;
         return;
     }
     if (opt_topd >= 0 && nd->depth <= opt_topd && !tl_noext) { nfw = (int)(nfw * opt_topx); nfw2 = (int)(nfw2 * opt_topx); }
@@ -2000,6 +2024,7 @@ int main(int argc, char **argv) {
     const char *logfn = NULL; char strat_name = 'C';
     for (int a = 3; a < argc; a++) {
         if (!strcmp(argv[a], "-ub")) ub0 = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-enum")) opt_enum = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-nfw")) opt_nfw = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-dives")) dives = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-q")) opt_q = atof(argv[++a]);
@@ -2078,6 +2103,9 @@ int main(int argc, char **argv) {
     double th0 = now();
     double hv = tabu(tabu_iters, seed, p);
     double t_heur = now() - th0;
+    if (opt_enum) for (int i = 0; i < N; i++) for (int j = 0; j < N; j++)
+        if (A[i][j] < 0 || B[i][j] < 0 || C0[i][j] < 0) { fprintf(stderr, "-enum needs nonnegative data\n"); exit(2); }
+    /* with -shift the increment Cr[a][b] + Ar[a][a] Br[b][b] of enum_rec is the unshifted one, so it stays nonnegative */
     if (opt_shift) {
         /* equivalent reformulation: A + diag(d), B + diag(g), linear term C0 */
         FILE *f = fopen(opt_shift, "r"); double d[NMAX], g[NMAX];
@@ -2253,9 +2281,9 @@ int main(int argc, char **argv) {
     double el = now() - t0;
     write_progress(1);
     printf("{\"mode\":\"%s\",\"strategy\":\"%c\",\"n\":%d,\"opt\":%.0f,\"heuristic\":%.0f,\"t_heur\":%.2f,\"nodes\":%ld,\"laps\":%ld,\"fw_iters\":%ld,"
-           "\"wall_s\":%.2f,\"cpu_bound_s\":%.2f,\"threads\":%d,\"tasks\":%ld,\"symA\":%d,\"symB\":%d,\"dom\":%ld,\"domlb\":%ld,\"fw_branch\":[%ld,%ld],\"fw_fathom\":[%ld,%ld],\"perm\":[",
+           "\"wall_s\":%.2f,\"cpu_bound_s\":%.2f,\"threads\":%d,\"tasks\":%ld,\"symA\":%d,\"symB\":%d,\"dom\":%ld,\"enum\":%ld,\"domlb\":%ld,\"fw_branch\":[%ld,%ld],\"fw_fathom\":[%ld,%ld],\"perm\":[",
            mode, strat_name, N, (double)g_ub, hv, t_heur, tot.nodes, lap_tot, fw_tot, el, tot.t_bound,
-           strcmp(mode, "par") ? 1 : opt_threads, tasks_done, GA.n, GB.n, g_dom_pruned, g_domlb_pruned + g_domcov_pruned, g_fwstat[0][0], g_fwstat[0][1], g_fwstat[1][0], g_fwstat[1][1]);
+           strcmp(mode, "par") ? 1 : opt_threads, tasks_done, GA.n, GB.n, g_dom_pruned, g_enum_nodes, g_domlb_pruned + g_domcov_pruned, g_fwstat[0][0], g_fwstat[0][1], g_fwstat[1][0], g_fwstat[1][1]);
     for (int i = 0; i < N; i++) printf("%d%s", g_best[i] + 1, i < N - 1 ? "," : "");
     printf("],\"nodes_depth\":[");
     int last = 0; for (int d = 0; d <= N; d++) if (tot.nodes_depth[d]) last = d;

@@ -237,3 +237,20 @@ Coût d'une seule décomposition propre (valeurs propres seules, un cœur) :
 | 26 | 625 | 76 ms |
 
 Un nœud QPB coûte 0,1 à 0,24 ms. Sur nug12, l'arbre QPB + D (453 nœuds QPB et 121 appels à D) contre 1 075 nœuds QPB donne le seuil de rentabilité : un appel à D doit coûter moins d'environ 5 nœuds QPB. Une seule décomposition propre dépasse ce seuil dès m = 14. Conclusion : la borne QPB + D n'est pas rentable sur CPU sous cette forme, sauf si le gain d'arbre grandit beaucoup avec la taille, ce que nous n'avons pas pu mesurer (nug14 arrêté).
+
+### Énumération des petits sous-problèmes (26 octobre)
+
+Idée reprise de Fujii et al. (2021), qui énumèrent les sous-problèmes de 7 usines libres ou moins au lieu de les borner. Option `-enum k` : un nœud qui a au plus k usines libres est résolu par une énumération en profondeur, coupée dès que le coût partiel atteint le meilleur coût connu. Cette coupe est valide quand A, B et C0 sont positifs ou nuls (vérifié au départ ; avec `-shift`, l'incrément de chaque affectation reste celui des données non décalées). Le nœud est ensuite fermé.
+
+nug20, stratégie C, `-ub 2571 -nointprune`, un cœur :
+
+| k | nœuds | nœuds énumérés | temps |
+|---|---|---|---|
+| 0 (référence) | 992 813 | 0 | 68,8 s |
+| 6 | 992 811 | 10 | 69,1 s |
+| 7 | 992 801 | 64 | 71,4 s |
+| 8 | 992 737 | 388 | 70,1 s |
+| 9 | 992 349 | 2 341 | 101,4 s |
+| 10 | arrêté après 10 min | | |
+
+L'arbre QPB n'atteint presque jamais les petits sous-problèmes : sur nug20, 64 nœuds seulement ont 7 usines libres ou moins, et les nœuds se concentrent entre 11 et 15 usines libres. À partir de 9, l'énumération coûte plus cher que la borne. Chez Fujii et al., un nœud coûte des secondes, ce qui rend l'énumération de 5 040 permutations avantageuse ; chez nous un nœud coûte 0,1 ms. Piste close.
