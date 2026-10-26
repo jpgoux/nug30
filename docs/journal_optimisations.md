@@ -254,3 +254,21 @@ nug20, stratégie C, `-ub 2571 -nointprune`, un cœur :
 | 10 | arrêté après 10 min | | |
 
 L'arbre QPB n'atteint presque jamais les petits sous-problèmes : sur nug20, 64 nœuds seulement ont 7 usines libres ou moins, et les nœuds se concentrent entre 11 et 15 usines libres. À partir de 9, l'énumération coûte plus cher que la borne. Chez Fujii et al., un nœud coûte des secondes, ce qui rend l'énumération de 5 040 permutations avantageuse ; chez nous un nœud coûte 0,1 ms. Piste close.
+
+## Le gril du 26 octobre au soir : la famille RLT mesurée aux nœuds
+
+Jean-Pierre demande une remise en cause complète (« grill me ») : relire le code, chiffrer l'objectif, inventer. Document de travail : « Nug30 : le gril et le facteur dix ». Résultats de la soirée, dans l'ordre des mesures.
+
+**L'objectif en heures-cœur.** Notre estimation nug30 vaut 1 450 à 1 750 heures-cœur ; Fujii et al. 2021 en ont utilisé 1 507 (3 140 s sur 1 728 cœurs) ; la GTX TITAN de Gonçalves et al. 2015 représente un équivalent du même ordre (conversion grossière). Un jour sur 4 cœurs vaut 96 heures-cœur : l'objectif dépasse l'état de l'art d'un facteur 16, il ne le rattrape pas.
+
+**Relecture du code.** Pas de défaut trouvé. Un nœud nug20 moyen : 69 µs, soit 15,7 itérations de Frank-Wolfe à 4,4 µs, dominées par le LAP réchauffé sans branchement. Gisement résiduel estimé ×1,3 à ×1,8 : règle d'arrêt tirée des statistiques g_gapstat plutôt que des stratégies à la main, LAP flottant pour les directions seules, K et Cr incrémentaux. Pas d'hyperthreading sur la machine (4 cœurs, 1 fil par cœur).
+
+**RLT1 aux nœuds (mesure décisive).** Formulation LP exacte d'Adams-Johnson niveau 1 avec symétrie, résolue par HiGHS (Python d'exploration : experiments/rlt1.py ; contrôle sur un nœud à 6 usines libres : LP = optimum exact). Attention : première version sans la famille de contraintes « somme sur l'usine partenaire », qui donnait une borne très au-dessous de QPB ; la famille ajoutée, le contrôle passe.
+
+- nug14 racine : QPB 888,4 (150 it.) contre RLT1 922,9 (+34,5).
+- nug14 profondeur 4, les 12 nœuds de l'échantillon graine 1 (seuil 1014) : RLT1 = 1021,1 ; 1014,0 ; 1016,0 ; 1028,1 ; 1027,3 ; 1027,0 ; 1034,0 ; 1028,0 ; 1066,1 ; 1065,0 ; 1058,0 ; 1044,0. Médiane RLT1 − QPB = +42, quand le plafond SDP de la famille QPB (S, T, D optimaux) est à +13,9. RLT1 élague 11 nœuds sur 12 (QPB : 3 ; plafond SDP : 5) et dépasse le plafond SDP partout (+10 à +35).
+- nug20 profondeur 6 (m = 14, seuil 2570), six premiers nœuds : écarts +74,9 ; +71,0 ; +57,0 ; +67,7 ; +84,4 (élagué : 2571,3) ; +63,7. Médiane provisoire +69. La courbe δ dit que +64 partout divise l'arbre par 26 : l'écart mesuré est au niveau requis.
+
+**Borne congelée (idée neuve testée et fermée le soir même).** Les duals exacts du LP racine donnent une borne évaluable à tout nœud pour un LAP : constante + coûts réduits des affectations fixées + LAP sur la partie libre (experiments/frozen.py). Sur les 12 nœuds nug14 : 937 à 968, soit 25 à 60 sous QPB. Congeler depuis la racine décroît trop vite ; l'idée ne survit que comme démarrage chaud d'une remontée depuis un ancêtre proche.
+
+**Décision.** Voie principale : montée duale RLT1 en C sur notre LAP réchauffé, duals hérités du père, déclenchée seulement quand QPB atterrit dans la bande [seuil − Δ, seuil] (17 % des nœuds sur nug20). Portes de sortie : capturer au moins deux tiers de l'écart LP − QPB en cinq passes à froid, puis temps mur ÷3 sur nug22. Suivent la fixation de paires par coûts réduits, puis la dominance par table, le branchement appris hors ligne et la règle d'arrêt apprise. Le site porte un nouvel onglet « Recommandations » qui garde la trace datée.
