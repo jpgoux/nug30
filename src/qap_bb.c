@@ -995,6 +995,95 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     return best;
 }
 
+
+/* ---------- RLT1 dual ascent (Hahn and Grant; steps 1a to 3 of Hahn, Hightower, Johnson,
+ * Guignard and Roucairol, level-1 case) ----------
+ * Cost of a completion = R + sum_ab L[a][b] x_ab + sum_{a!=c, b!=d} Q[a][b][c][d] y_abcd, with
+ * y_abcd = y_cdab. Every operation below keeps the cost of every permutation unchanged and every
+ * L, Q entry nonnegative (reduced costs of exact LAP duals), so R is a valid lower bound at any time. */
+typedef struct { int m; double *Q; double L[NMAX][NMAX]; double R; double vs[NMAX * NMAX][NMAX]; int warm; } rlt_t;
+#define QX(m, a, b, c, d) ((((size_t)(a) * (m) + (b)) * (m) + (c)) * (m) + (d))
+static int opt_rhalf = 0;   /* 1: a submatrix collects only half of its twin costs */
+static void rlt_init(rlt_t *r, int m, double Ar[NMAX][NMAX], double Br[NMAX][NMAX], double Cr[NMAX][NMAX], double K) {
+    r->m = m; r->R = K; r->warm = 0;
+    if (!r->Q) r->Q = malloc(sizeof(double) * NMAX * NMAX * NMAX * NMAX);
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
+        r->L[a][b] = Cr[a][b] + Ar[a][a] * Br[b][b];
+        for (int c = 0; c < m; c++) for (int d = 0; d < m; d++)
+            r->Q[QX(m, a, b, c, d)] = (c != a && d != b) ? Ar[a][c] * Br[b][d] : 0;
+    }
+}
+/* LAP with u_i = min_j (c_ij - v_j): returns sum u + sum v, leaves c - u - v >= 0 in red (exactly, in floating point) */
+static double lap_reduce(int n, double c[NMAX][NMAX], double *v, int warm) {
+    int rs[NMAX]; double u[NMAX];
+    if (!warm) for (int j = 0; j < n; j++) { double mn = INFINITY; for (int i = 0; i < n; i++) mn = c[i][j] < mn ? c[i][j] : mn; v[j] = mn; }
+    lap_sp(n, c, rs, u, v, 0);
+    double tot = 0;
+    for (int i = 0; i < n; i++) { double mn = INFINITY; for (int j = 0; j < n; j++) { double h = c[i][j] - v[j]; c[i][j] = h; mn = h < mn ? h : mn; }
+        for (int j = 0; j < n; j++) c[i][j] -= mn; tot += mn; }
+    for (int j = 0; j < n; j++) tot += v[j];
+    return tot;
+}
+/* one pass: spread L over the rows of each submatrix, one LAP per submatrix (after collecting
+ * its twin costs), its value back to L, then the LAP on L raises R */
+static double rlt_pass(rlt_t *r) {
+    int m = r->m, n1 = m - 1; double c[NMAX][NMAX];
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {   /* step 1a */
+        double t = r->L[a][b] / n1; if (t == 0) continue;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { double *q = r->Q + QX(m, a, b, cc, 0); for (int d = 0; d < m; d++) if (d != b) q[d] += t; }
+        r->L[a][b] = 0;
+    }
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {   /* step 2 */
+        int i = 0;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { int j = 0;
+            for (int d = 0; d < m; d++) if (d != b) {
+                double *tw = r->Q + QX(m, cc, d, a, b), *q = r->Q + QX(m, a, b, cc, d);
+                double x = opt_rhalf ? 0.5 * *tw : *tw;
+                *q += x; *tw -= x; c[i][j++] = *q; }
+            i++; }
+        double val = lap_reduce(n1, c, r->vs[a * m + b], r->warm);
+        i = 0;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { int j = 0; double *q = r->Q + QX(m, a, b, cc, 0);
+            for (int d = 0; d < m; d++) if (d != b) q[d] = c[i][j++];
+            i++; }
+        r->L[a][b] += val;
+    }
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) c[a][b] = r->L[a][b];   /* step 3 */
+    double vm[NMAX]; double val = lap_reduce(m, c, vm, 0);
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) r->L[a][b] = c[a][b];
+    r->R += val; r->warm = 1;
+    return r->R;
+}
+
+
+/* Lagrangian evaluation on top of a DP state: for ANY antisymmetric shift lam (lam_abcd added to
+ * Q_abcd, subtracted from its twin Q_cdab) the value R + LAP_master(L_ab + LAP_ab(Q + lam)) is a
+ * valid lower bound (exact LAPs, no sign condition). Subgradient: x_ab y^ab_cd - x_cd y^cd_ab. */
+static double rlt_lag(rlt_t *r, const double *lam, int *xm, int ys[NMAX * NMAX][NMAX]) {
+    int m = r->m, n1 = m - 1; double c[NMAX][NMAX], Lm[NMAX][NMAX];
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
+        int i = 0;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { int j = 0;
+            for (int d = 0; d < m; d++) if (d != b) { size_t k = QX(m, a, b, cc, d), kt = QX(m, cc, d, a, b);
+                c[i][j++] = r->Q[k] + lam[k] - lam[kt]; }
+            i++; }
+        int rs[NMAX]; double u[NMAX], *v = r->vs[a * m + b];
+        double val = lap_sp(n1, c, rs, u, v, 0);
+        { double tot = 0; for (int ii = 0; ii < n1; ii++) { double mn = INFINITY; for (int j = 0; j < n1; j++) { double h = c[ii][j] - v[j]; mn = h < mn ? h : mn; } tot += mn; }
+          for (int j = 0; j < n1; j++) tot += v[j]; val = tot; }
+        Lm[a][b] = r->L[a][b] + val;
+        i = 0; for (int cc = 0; cc < m; cc++) if (cc != a) { int col = rs[i]; ys[a * m + b][cc] = col < b ? col : col + 1; i++; }
+        ys[a * m + b][a] = -1;
+    }
+    double u[NMAX], v[NMAX];
+    for (int j = 0; j < m; j++) { double mn = INFINITY; for (int i = 0; i < m; i++) mn = Lm[i][j] < mn ? Lm[i][j] : mn; v[j] = mn; }
+    lap_sp(m, Lm, xm, u, v, 0);
+    double tot = 0; for (int i = 0; i < m; i++) { double mn = INFINITY; for (int j = 0; j < m; j++) { double h = Lm[i][j] - v[j]; mn = h < mn ? h : mn; } tot += mn; }
+    for (int j = 0; j < m; j++) tot += v[j];
+    return r->R + tot;
+}
+
+
 /* ---------- symmetry: automorphism groups of A and B ---------- */
 #define GMAX 4096
 typedef struct { int n; int perm[GMAX][NMAX]; } group_t;
@@ -1310,6 +1399,56 @@ static void enum_rec(work_t *w, int m, int a, double cost, double cut, double *b
     (void)L;
 }
 
+
+/* ---------- -domtab: dominance between nodes with the same free facilities and free locations ----------
+ * Two such nodes N1, N2 have the same quadratic part on every completion pi; their costs differ by
+ * K2 - K1 + sum_a (Cr2 - Cr1)[a][pi(a)]. If K2 - K1 + LAP(Cr2 - Cr1) >= 0, every completion of N2 costs
+ * at least the same completion of N1. In serial depth-first search N1's subtree is finished before
+ * N2 is evaluated (same masks, so neither descends from the other), hence N2 can be pruned.
+ * Cr is integer for integer data and is stored exactly as int32. */
+static int opt_domtab = 0, opt_dtmlo = 4, opt_dtmhi = 30, opt_dtmax = 16; static long g_domtab_pruned = 0, g_domtab_ins = 0, g_domtab_lap = 0;
+typedef struct { unsigned long long key; double K, z; int next; long off, uoff; } dtent_t;
+static float *g_dtu = NULL; static long g_dtuu = 0; static long g_domtab_tr = 0;
+static int *g_dth = NULL; static dtent_t *g_dte = NULL; static int g_dtn = 0, g_dtcap = 0; static int *g_dta = NULL; static long g_dtau = 0, g_dtacap = 0;
+static void domtab_init(void) {
+    if (g_dth) return;
+    g_dth = malloc(sizeof(int) << 24); memset(g_dth, 0xff, sizeof(int) << 24); g_dtcap = 8 << 20; g_dte = malloc(sizeof(dtent_t) * g_dtcap);
+    g_dtacap = 300L << 20; g_dta = malloc(sizeof(int) * g_dtacap); g_dtu = malloc(sizeof(float) * g_dtacap);
+}
+static inline unsigned dt_hash(unsigned long long key) { return (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 40); }
+/* returns 1 if the node can be pruned: dominated by a twin, or its bound transferred from a twin exceeds thr.
+ * Transfer: cost(N1, pi) >= z1 + <U1, P_pi> for every completion (QPB reduced costs, stored rounded down),
+ * so cost(N2, pi) >= z1 + K2 - K1 + LAP(U1 + Cr2 - Cr1). */
+static int domtab_check(work_t *w, int m, double K, double thr) {
+    domtab_init();
+    unsigned long long key = ((unsigned long long)w->maskF << 32) | w->maskL; unsigned h = dt_hash(key);
+    int seen = 0;
+    for (int e = g_dth[h]; e >= 0 && seen < opt_dtmax; e = g_dte[e].next) {
+        if (g_dte[e].key != key) continue; seen++;
+        const int *c1 = g_dta + g_dte[e].off; const float *u1 = g_dtu + g_dte[e].uoff; double D[NMAX][NMAX], dk = K - g_dte[e].K, rmin = 0;
+        for (int a = 0; a < m; a++) { double mn = INFINITY; for (int b = 0; b < m; b++) { double x = w->Cr[a][b] - c1[a * m + b]; D[a][b] = x; mn = x < mn ? x : mn; } rmin += mn; }
+        if (dk + rmin >= -1e-9) { g_domtab_pruned++; return 1; }
+        int rs[NMAX]; double u[NMAX], v[NMAX]; g_domtab_lap++;
+        if (dk + lap(m, D, rs, u, v) >= -1e-9) { g_domtab_pruned++; return 1; }
+        if (opt_domtab > 1 && isfinite(g_dte[e].z) && g_dte[e].z + dk > thr - 200) {
+            for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) D[a][b] += u1[a * m + b];
+            if (g_dte[e].z + dk + lap(m, D, rs, u, v) > thr) { g_domtab_tr++; return 1; }
+        }
+    }
+    return 0;
+}
+static void domtab_store(work_t *w, int m, double K, double z) {
+    domtab_init();
+    if (!(g_dtn < g_dtcap && g_dtau + m * m <= g_dtacap)) return;
+    unsigned long long key = ((unsigned long long)w->maskF << 32) | w->maskL; unsigned h = dt_hash(key);
+    dtent_t *t = &g_dte[g_dtn]; t->key = key; t->K = K; t->z = z; t->next = g_dth[h];
+    long off = g_dtau; t->off = off; t->uoff = off;
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
+        g_dta[off + a * m + b] = (int)lrint(w->Cr[a][b]);
+        float f = (float)w->U[a][b]; if ((double)f > w->U[a][b]) f = nextafterf(f, -INFINITY); g_dtu[off + a * m + b] = f; }
+    g_dtau += m * m; g_dth[h] = g_dtn++; g_domtab_ins++;
+}
+
 static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
     int m = 0, mc = 0;
     w->maskF = w->maskL = 0;
@@ -1344,6 +1483,11 @@ static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw
             for (int t = 0; t < nf; t++) s += x[t] * y[t];
             w->Cr[a][b] = 2 * s + C0[ev->F[a]][ev->L[b]];
         }
+    }
+    if (opt_domtab && m >= opt_dtmlo && m <= opt_dtmhi && !tl_noext && domtab_check(w, m, K, prune_thr(g_ub))) {
+        ev->z = INFINITY; w->x0_ok = 0;
+        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) w->U[a][b] = 0;
+        return;
     }
     double target = prune_thr(g_ub);   /* integer data: fathom if bound > ub - 1 */
     if (m <= 1) {
@@ -1670,18 +1814,114 @@ static void read_resume(const char *fn) {
     fprintf(stderr, "resume: %d open nodes, %ld nodes already done, ub %.0f\n", g_rn, nodes, ub);
 }
 
+
+/* bake an antisymmetric shift lam into the state: Q += lam - lam^T, then exact slave and master
+ * reductions; afterwards every entry is >= 0 again and R = the Lagrangian value at lam */
+static void rlt_bake(rlt_t *r, const double *lam) {
+    int m = r->m, n1 = m - 1; double c[NMAX][NMAX];
+    size_t M4 = (size_t)m * m * m * m; double *T = malloc(sizeof(double) * M4);
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) for (int cc = 0; cc < m; cc++) for (int d = 0; d < m; d++) {
+        size_t k = QX(m, a, b, cc, d); T[k] = (cc != a && d != b) ? r->Q[k] + lam[k] - lam[QX(m, cc, d, a, b)] : 0; }
+    memcpy(r->Q, T, sizeof(double) * M4); free(T);
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) {
+        int i = 0;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { int j = 0; for (int d = 0; d < m; d++) if (d != b) c[i][j++] = r->Q[QX(m, a, b, cc, d)]; i++; }
+        double val = lap_reduce(n1, c, r->vs[a * m + b], 0);
+        i = 0;
+        for (int cc = 0; cc < m; cc++) if (cc != a) { int j = 0; double *q = r->Q + QX(m, a, b, cc, 0); for (int d = 0; d < m; d++) if (d != b) q[d] = c[i][j++]; i++; }
+        r->L[a][b] += val;
+    }
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) c[a][b] = r->L[a][b];
+    double vm[NMAX]; double val = lap_reduce(m, c, vm, 0);
+    for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) r->L[a][b] = c[a][b];
+    r->R += val;
+}
+static int opt_sg = 0; static double opt_sgth = 1.4; static long g_sg_it = 0;
+/* subgradient on the twin splits from the current state, Polyak step towards thr + 1; bakes the best point */
+static double rlt_sg(rlt_t *r, int iters, double thr) {
+    int m = r->m; size_t M4 = (size_t)m * m * m * m;
+    double *lam = calloc(M4, sizeof(double)), *bl = calloc(M4, sizeof(double));
+    static __thread int ys[NMAX * NMAX][NMAX]; int xm[NMAX];
+    double best = r->R; int have = 0;
+    for (int it = 0; it < iters; it++) {
+        double z = rlt_lag(r, lam, xm, ys); g_sg_it++;
+        if (z > best + 1e-9) { best = z; memcpy(bl, lam, sizeof(double) * M4); have = 1; }
+        if (best > thr) break;
+        int cnt = 0;
+        for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
+            if (!(xm[cc] == d && ys[cc * m + d][a] == b)) cnt++; } }
+        if (!cnt) break;
+        double step = opt_sgth * (thr + 1 - z) / (2.0 * cnt);
+        for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
+            if (!(xm[cc] == d && ys[cc * m + d][a] == b)) lam[QX(m, a, b, cc, d)] += step; } }
+    }
+    if (have) rlt_bake(r, bl);
+    free(lam); free(bl);
+    return r->R;
+}
+
+static int opt_hyb = 0, opt_hybm = 6, opt_hybpass = 20; static double opt_hybd = 40, g_hyb_t = 0; static long g_hyb_calls = 0, g_hyb_fath = 0;
+/* ---------- B&B on the RLT1 dual state alone (experiment -rltbb) ----------
+ * The child a->b of a DP state (R, L, Q >= 0) is exact and inherits everything:
+ * R' = R + L_ab, L'_cd = L_cd + Q_abcd + Q_cdab, Q' = Q restricted. All entries stay >= 0,
+ * so R' >= R: the bound only grows going down, and R + L_ab already bounds the child. */
+static long g_rbb_nodes = 0, g_rbb_pass = 0; static int opt_rbb_pass = 3; static double opt_rbb_eps = 0.5;
+static int g_rbb_perm[NMAX];
+static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
+    int m = r->m; g_rbb_nodes++;
+    double thr = prune_thr(g_ub);
+    if (m == 1) { double c = r->R + r->L[0][0];
+        if (c < g_ub) { int p[NMAX]; memcpy(p, g_rbb_perm, sizeof p); p[F[0]] = Lc[0]; report_solution(p, c, 0); }
+        return; }
+    for (int k = 0; k < opt_rbb_pass; k++) { double z0 = r->R; rlt_pass(r); g_rbb_pass++; if (r->R > thr || r->R - z0 < opt_rbb_eps) break; }
+    if (opt_sg && r->R <= thr && m > 3) rlt_sg(r, opt_sg, thr);
+    if (r->R > thr) return;
+    /* branch on the facility whose row of reduced master costs has the largest sum (most children cut) */
+    int ab = 0; double bs = -1;
+    for (int a = 0; a < m; a++) { double t = 0; for (int b = 0; b < m; b++) t += r->L[a][b] > thr - r->R ? 1e6 : r->L[a][b]; if (t > bs) { bs = t; ab = a; } }
+    int ord[NMAX], no = 0; for (int b = 0; b < m; b++) ord[no++] = b;
+    for (int i = 1; i < no; i++) { int x = ord[i], j = i; while (j > 0 && r->L[ab][ord[j - 1]] > r->L[ab][x]) { ord[j] = ord[j - 1]; j--; } ord[j] = x; }
+    rlt_t *ch = calloc(1, sizeof(rlt_t)); ch->Q = malloc(sizeof(double) * (size_t)m * m * m * m);
+    for (int t = 0; t < no; t++) {
+        int b = ord[t]; if (r->R + r->L[ab][b] > prune_thr(g_ub)) continue;
+        int n1 = m - 1, F2[NMAX], L2[NMAX], ri[NMAX], ci[NMAX], k = 0;
+        for (int a = 0; a < m; a++) if (a != ab) { F2[k] = F[a]; ri[k++] = a; }
+        k = 0; for (int d = 0; d < m; d++) if (d != b) { L2[k] = Lc[d]; ci[k++] = d; }
+        ch->m = n1; ch->R = r->R + r->L[ab][b]; ch->warm = 0;
+        for (int i = 0; i < n1; i++) for (int j = 0; j < n1; j++) { int c = ri[i], d = ci[j];
+            ch->L[i][j] = r->L[c][d] + r->Q[QX(m, ab, b, c, d)] + r->Q[QX(m, c, d, ab, b)];
+            for (int i2 = 0; i2 < n1; i2++) for (int j2 = 0; j2 < n1; j2++) ch->Q[QX(n1, i, j, i2, j2)] = r->Q[QX(m, c, d, ri[i2], ci[j2])]; }
+        g_rbb_perm[F[ab]] = Lc[b];
+        rbb_dfs(ch, F2, L2, depth + 1);
+        g_rbb_perm[F[ab]] = -1;
+    }
+    free(ch->Q); free(ch);
+}
+
+
 static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     eval_t ev;
     if (opt_ckpt && now() - g_ckpt_last > opt_ckpt_s) write_ckpt(nd);
     double t = now(); long fw0 = w->nfw;
     { const rule_t *R = rule_at(nd->depth); eval_node(nd, w, &ev, R->nfw1, R->nfw2, who); }
     st->t_bound += now() - t;
+    if (opt_domtab && ev.m >= opt_dtmlo && ev.m <= opt_dtmhi && isfinite(ev.z)) domtab_store(w, ev.m, ev.K, ev.z);
     if (ev.m > 1) { int f = ev.z > prune_thr(g_ub); g_fwstat[f][0]++; g_fwstat[f][1] += w->nfw - fw0;
         if (!f && g_gapstat) { double thr = prune_thr(g_ub), g = thr - ev.z; int hi = w->flast >= thr; int b = g < 1 ? 0 : g < 2 ? 1 : g < 5 ? 2 : g < 10 ? 3 : g < 20 ? 4 : g < 50 ? 5 : 6;
             g_gaph[hi][b]++; } }
     st->nodes++; st->nodes_depth[nd->depth]++;
     g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0) write_progress(0);
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
+    if (opt_hyb && ev.m >= opt_hybm && ev.z > prune_thr(g_ub) - opt_hybd) {   /* -hyb: RLT1 ascent on the nodes QPB leaves near the threshold */
+        static __thread rlt_t *hr = NULL; if (!hr) hr = calloc(1, sizeof(rlt_t));
+        double th0 = now(); g_hyb_calls++;
+        rlt_init(hr, ev.m, w->Ar, w->Br, w->Cr, ev.K);
+        double thr = prune_thr(g_ub);
+        for (int k = 0; k < opt_hybpass && hr->R <= thr; k++) rlt_pass(hr);
+        if (hr->R <= thr && opt_sg) rlt_sg(hr, opt_sg, thr);
+        g_hyb_t += now() - th0;
+        if (hr->R > thr) { g_hyb_fath++; st->fathom_at_bound++; return; }
+    }
     if (opt_domlb && domlb(nd, &ev, w)) { g_domlb_pruned++; return; }
     if (opt_domcov && domcov(nd, &ev, w)) { g_domcov_pruned++; return; }
     unsigned fbsave[NMAX];
@@ -2025,6 +2265,13 @@ int main(int argc, char **argv) {
     for (int a = 3; a < argc; a++) {
         if (!strcmp(argv[a], "-ub")) ub0 = atof(argv[++a]);
         else if (!strcmp(argv[a], "-enum")) opt_enum = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-hyb")) { opt_hyb = 1; opt_hybd = atof(argv[++a]); opt_sg = atoi(argv[++a]); opt_rhalf = 1; }
+        else if (!strcmp(argv[a], "-hybm")) opt_hybm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-domtab")) opt_domtab = 1;
+        else if (!strcmp(argv[a], "-domtab2")) opt_domtab = 2;
+        else if (!strcmp(argv[a], "-dtm")) { opt_dtmlo = atoi(argv[++a]); opt_dtmhi = atoi(argv[++a]); }
+        else if (!strcmp(argv[a], "-hybpass")) opt_hybpass = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-sgth")) opt_sgth = atof(argv[++a]);
         else if (!strcmp(argv[a], "-nfw")) opt_nfw = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-dives")) dives = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-q")) opt_q = atof(argv[++a]);
@@ -2141,6 +2388,64 @@ int main(int argc, char **argv) {
         }
         for (int i = 0; i < N; i++) for (int k = 0; k < N; k++) A[i][k] *= lam;
         if (lam == 0) { /* GLB itself: LAP of L */ }
+    }
+    if (!strcmp(mode, "rltbb")) {   /* experiment: B&B on the inherited RLT1 dual state */
+        opt_rhalf = getenv("HALF") ? atoi(getenv("HALF")) : 1;
+        if (getenv("PASS")) opt_rbb_pass = atoi(getenv("PASS")); if (getenv("SGIT")) opt_sg = atoi(getenv("SGIT")); if (getenv("THETA")) opt_sgth = atof(getenv("THETA")); if (getenv("EPS")) opt_rbb_eps = atof(getenv("EPS"));
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        work_t *w = calloc(1, sizeof(work_t)); eval_t ev; double save = g_ub; g_ub = INFINITY;
+        eval_node(&nd, w, &ev, opt_nfw, opt_nfw, 0); g_ub = save;
+        static rlt_t rr; rlt_init(&rr, ev.m, w->Ar, w->Br, w->Cr, ev.K);
+        int RP = getenv("ROOTPASS") ? atoi(getenv("ROOTPASS")) : 50; for (int k = 0; k < RP; k++) rlt_pass(&rr);
+        double root = rr.R, t0 = now(); for (int i = 0; i < N; i++) g_rbb_perm[i] = -1;
+        rbb_dfs(&rr, ev.F, ev.L, 0);
+        printf("{\"mode\":\"rltbb\",\"n\":%d,\"root\":%.2f,\"opt\":%.0f,\"nodes\":%ld,\"passes\":%ld,\"sg_it\":%ld,\"wall_s\":%.2f}\n", N, root, (double)g_ub, g_rbb_nodes, g_rbb_pass, g_sg_it, now() - t0);
+        return 0;
+    }
+    if (!strcmp(mode, "rlt1")) {   /* RLT1 dual ascent at one node (FIX="i:j ..."), ITERS passes */
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;
+            while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
+        int IT = getenv("ITERS") ? atoi(getenv("ITERS")) : 20; opt_rhalf = getenv("HALF") ? atoi(getenv("HALF")) : 0;
+        work_t *w = calloc(1, sizeof(work_t)); eval_t ev; double save = g_ub; g_ub = INFINITY;
+        double tq = now(); eval_node(&nd, w, &ev, opt_nfw, opt_nfw, 0); tq = now() - tq; g_ub = save;
+        static rlt_t rr; double t0 = now();
+        rlt_init(&rr, ev.m, w->Ar, w->Br, w->Cr, ev.K);
+        printf("{\"m\":%d,\"qpb\":%.2f,\"t_qpb\":%.5f,\"rlt\":[", ev.m, ev.z, tq);
+        for (int it = 1; it <= IT; it++) { double z = rlt_pass(&rr); printf("%s[%d,%.2f,%.4f]", it > 1 ? "," : "", it, z, now() - t0); }
+        printf("]");
+        if (getenv("CYC")) {   /* cycles of SG k iterations + bake + one DP pass */
+            int k = atoi(getenv("CYC")), nc = getenv("NCYC") ? atoi(getenv("NCYC")) : 50; double thr = getenv("THR") ? atof(getenv("THR")) : g_ub;
+            if (getenv("THETA")) opt_sgth = atof(getenv("THETA"));
+            double t1 = now(); printf(",\"cyc\":[");
+            for (int c = 1; c <= nc; c++) { rlt_sg(&rr, k, thr); rlt_pass(&rr); printf("%s[%d,%.2f,%.4f]", c > 1 ? "," : "", c, rr.R, now() - t1); if (rr.R > thr) break; }
+            printf("]");
+        }
+        int SG = getenv("SG") ? atoi(getenv("SG")) : 0;
+        if (SG) {   /* subgradient on the twin splits, Polyak step towards THR */
+            int m = ev.m; double thr = getenv("THR") ? atof(getenv("THR")) : g_ub, th = getenv("THETA") ? atof(getenv("THETA")) : 1.0;
+            double *lam = calloc((size_t)m * m * m * m, sizeof(double)); static int ys[NMAX * NMAX][NMAX]; int xm[NMAX], xinv[NMAX];
+            double best = rr.R, t1 = now(); printf(",\"sg\":[");
+            for (int it = 1; it <= SG; it++) {
+                double z = rlt_lag(&rr, lam, xm, ys); if (z > best) best = z;
+                if (it == 1 || it % 10 == 0 || it == SG) printf("%s[%d,%.2f,%.2f,%.4f]", it > 1 ? "," : "", it, z, best, now() - t1);
+                if (best > thr) break;
+                /* g_abcd = x_ab y^ab_cd - x_cd y^cd_ab, kept antisymmetric through lam_abcd - lam_cdab */
+                for (int a = 0; a < m; a++) xinv[xm[a]] = a;
+                double g2 = 0; int cnt = 0;
+                for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
+                    /* +1 on (ab,cd) unless the twin slave (cd) chose (ab) with x_cd = 1 too */
+                    int twin = (xm[cc] == d && ys[cc * m + d][a] == b); if (!twin) cnt++; } }
+                g2 = 2.0 * cnt; if (g2 == 0) { printf("]"); break; }
+                double step = th * (thr - z) / g2; if (step < 0) step = -step;
+                for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
+                    int twin = (xm[cc] == d && ys[cc * m + d][a] == b); if (!twin) lam[QX(m, a, b, cc, d)] += step; } }
+                if (it == SG) printf("]");
+            }
+            printf(",\"best\":%.2f", best);
+        }
+        printf("}\n");
+        return 0;
     }
     if (!strcmp(mode, "dbound")) {   /* QPB + D at one node (FIX="i:j ..."): sup over (s, t, D) by Polyak supergradient, exact convexity repair */
         node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
@@ -2289,6 +2594,8 @@ int main(int argc, char **argv) {
     int last = 0; for (int d = 0; d <= N; d++) if (tot.nodes_depth[d]) last = d;
     for (int d = 0; d <= last; d++) printf("%ld%s", tot.nodes_depth[d], d < last ? "," : "");
     printf("]}\n");
+    if (opt_domtab) fprintf(stderr, "{\"domtab_pruned\":%ld,\"domtab_tr\":%ld,\"domtab_ins\":%ld,\"domtab_lap\":%ld,\"ints\":%ld}\n", g_domtab_pruned, g_domtab_tr, g_domtab_ins, g_domtab_lap, g_dtau);
+    if (opt_hyb) fprintf(stderr, "{\"hyb_calls\":%ld,\"hyb_fath\":%ld,\"hyb_t\":%.2f}\n", g_hyb_calls, g_hyb_fath, g_hyb_t);
     if (g_log) fclose(g_log);
     return 0;
 }

@@ -272,3 +272,47 @@ Jean-Pierre demande une remise en cause complète (« grill me ») : relire le c
 **Borne congelée (idée neuve testée et fermée le soir même).** Les duals exacts du LP racine donnent une borne évaluable à tout nœud pour un LAP : constante + coûts réduits des affectations fixées + LAP sur la partie libre (experiments/frozen.py). Sur les 12 nœuds nug14 : 937 à 968, soit 25 à 60 sous QPB. Congeler depuis la racine décroît trop vite ; l'idée ne survit que comme démarrage chaud d'une remontée depuis un ancêtre proche.
 
 **Décision.** Voie principale : montée duale RLT1 en C sur notre LAP réchauffé, duals hérités du père, déclenchée seulement quand QPB atterrit dans la bande [seuil − Δ, seuil] (17 % des nœuds sur nug20). Portes de sortie : capturer au moins deux tiers de l'écart LP − QPB en cinq passes à froid, puis temps mur ÷3 sur nug22. Suivent la fixation de paires par coûts réduits, puis la dominance par table, le branchement appris hors ligne et la règle d'arrêt apprise. Le site porte un nouvel onglet « Recommandations » qui garde la trace datée.
+
+## Nuit du 26 au 27 octobre : la montée RLT1 en C et la méthode hybride
+
+Jean-Pierre accepte une méthode hybride (« si c'est une méthode hybride ça me va ! ») : QPB reste la borne de la plupart des nœuds, une montée RLT1 ne décide que les nœuds proches du seuil. Tout le code de cette section est dans qap_bb.c (modes `rlt1`, `rltbb`, options `-hyb`, `-domtab`), testé par `make test` sans changement des résultats par défaut.
+
+**Montée duale de Hahn et Grant (étapes 1a, 2, 3 de la prépublication de Hahn, Hightower, Johnson, Guignard-Roucairol et Roucairol, lue pages 1 à 12).** État : constante R, matrice leader L (m × m), une matrice esclave Q_ab par paire (a, b). Une passe répartit L sur les lignes des sous-matrices, résout un LAP par sous-matrice après avoir rassemblé les coûts jumeaux (Q_abcd et Q_cdab ; option HALF : la moitié seulement), reporte le minimum de chaque LAP esclave dans L, puis un LAP maître sur L remonte R. Chaque réduction est exacte (`lap_reduce` : après le LAP, u = minimum de ligne de c − v, si bien que la matrice réduite reste positive ou nulle), donc R est une borne valide à chaque étape.
+
+**Vue lagrangienne.** Pour toute répartition antisymétrique λ des coûts jumeaux, R + LAP_maître(L + LAP_esclaves(Q + λ − λᵀ)) est une borne valide. Le DP n'est qu'un choix particulier de λ. Nous montons donc λ par sous-gradient (pas de Polyak vers seuil + 1, θ = 1,4), puis nous « cuisons » le meilleur λ dans l'état, ce qui garde toutes les entrées positives. Les enfants héritent l'état : R' = R + L_ab, L'_cd = L_cd + Q_abcd + Q_cdab.
+
+Nœud test nug14 (FIX = 0:0 4:9 5:1 9:5, m = 10, seuil 1 014) : QPB 976,9 ; LP RLT1 exact 1 021,1.
+
+| méthode | itérations | borne | temps |
+|---|---|---|---|
+| DP, HALF = 0 | 200 passes | 963 | |
+| DP, HALF = 1 | 200 passes | 977 | |
+| sous-gradient | 1 000 | 1 014 | ≈ 50 ms |
+| cycles k = 10 (sous-gradient puis une passe DP) | 3 000 | 997,9 | |
+| cycles k = 30 | 1 000 | 1 007,9 | |
+| cycles k = 100 | 1 000 | 1 014,5 | 54 ms |
+| cycles k = 100 | 3 000 | 1 014,7 | 152 ms |
+
+Le DP seul plafonne sous QPB à ce nœud ; le sous-gradient atteint 1 014 (élagage tout juste) en 1 000 itérations ; les cycles n'accélèrent rien.
+
+**Haut de l'arbre nug20.** Profondeur 3 (m = 17), après 2 000 itérations (≈ 0,9 s) : RLT1 2 333 et 2 318 contre QPB 2 385 et 2 393. Loin de la racine, la montée ne rattrape pas QPB dans un temps raisonnable.
+
+**B&B RLT1 pur (`rltbb`).** Branchement sur l'usine de plus grande somme réduite, enfants par L croissant.
+
+| instance | méthode | nœuds | temps |
+|---|---|---|---|
+| nug12 | QPB, sans symétrie | 532 | 0,24 s |
+| nug12 | RLT1, 1 000 it. | 267 | 2,8 s |
+| nug14 | QPB | 1 752 | 0,84 s |
+| nug14 | RLT1, 300 it. | 1 387 | 8,5 s |
+| nug14 | RLT1, 1 000 it. | 940 | 16,6 s |
+
+**Hybride (`-hyb D SG`).** Après le test d'élagage QPB, un nœud dont la borne QPB tombe dans [seuil − D, seuil] reçoit une montée RLT1 à froid (état initial tiré des matrices réduites du nœud), puis il est élagué si R dépasse le seuil. nug14 : D = 40 et 300 it. donnent 917 nœuds en 8,76 s ; D = 40 et 1 000 it. donnent 731 nœuds en 13,3 s (480 appels, 428 élagages). L'arbre est divisé par 2,4 et le temps multiplié par 15. La porte 2 (temps mur ÷3) échoue sur CPU : il faudrait une montée environ 50 fois plus rapide que notre sous-gradient pour que l'hybride paie, soit quelques passes seulement par nœud.
+
+**Table de dominance (`-domtab`).** Les nœuds de même ensemble d'usines libres se comparent : certificat K2 − K1 + LAP(Cr2 − Cr1) ≥ 0 (dominance) ou transfert de borne z1 + ΔK + LAP(U1 + Cr2 − Cr1). Sur nug20, 23 % des nœuds de branchement ont un jumeau ; 3 849 élagages par dominance et 13 301 par transfert, presque tous des feuilles : 990 851 nœuds contre 992 813, temps 66 à 76 s contre 58 s. Piste close.
+
+**Élagage entier.** Les coûts étant entiers, une borne > seuil − 1 suffit. Avec `-ub 2570` sans `-nointprune` : 944 243 nœuds contre 992 813 (−5 %). Légitime pour une vraie résolution ; nos bancs gardent `-nointprune` pour rester comparables.
+
+**Courbe δ sur nug30 (estimateur `-top 3`, graine 7, profils partiels).** Seuil 6 125 : 2,5e10 nœuds estimés ; seuil 6 061 (borne +63 partout) : 2,2e9. Gain d'au moins ×11 (×6,3 sur les profondeurs ≤ 10, l'arbre à 6 125 descend plus bas). Une seule graine.
+
+**Bilan de la nuit.** La famille RLT1 a l'écart voulu (+42 à +69 aux nœuds mesurés au LP exact), mais nous ne savons pas le capturer assez vite sur CPU : la montée de Hahn et Grant plafonne sous QPB, le sous-gradient a besoin de 1 000 itérations. Ce qui reste à essayer sur cette voie : une montée plus rapide (faisceaux, lissage, ou méthode de coordonnées sur λ par paire), et l'héritage de λ du père vers les enfants dans l'hybride, qui supprimerait le départ à froid.
