@@ -2114,6 +2114,86 @@ int main(int argc, char **argv) {
         for (int i = 0; i < N; i++) for (int k = 0; k < N; k++) A[i][k] *= lam;
         if (lam == 0) { /* GLB itself: LAP of L */ }
     }
+    if (!strcmp(mode, "dbound")) {   /* QPB + D at one node (FIX="i:j ..."): sup over (s, t, D) by Polyak supergradient, exact convexity repair */
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;
+            while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
+        double thr = getenv("THR") ? atof(getenv("THR")) : g_ub; int OUT = getenv("OUT") ? atoi(getenv("OUT")) : 40, INN = getenv("INN") ? atoi(getenv("INN")) : 30;
+        double theta = getenv("THETA") ? atof(getenv("THETA")) : 1.0;
+        work_t *w = calloc(1, sizeof(work_t)); eval_t ev; double save = g_ub; g_ub = INFINITY;
+        double tq = now(); eval_node(&nd, w, &ev, opt_nfw, opt_nfw, 0); tq = now() - tq; g_ub = save;
+        int m = ev.m, n1 = m - 1, NN = n1 * n1;
+        static double Ar[NMAX][NMAX], Br[NMAX][NMAX], Cr[NMAX][NMAX], V[NMAX][NMAX], Ah[NMAX][NMAX], Bh[NMAX][NMAX], WA[NMAX][NMAX], WB[NMAX][NMAX], UA[NMAX][NMAX], UB[NMAX][NMAX];
+        double K = ev.K, lam[NMAX], mu[NMAX];
+        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { Ar[a][b] = w->Ar[a][b]; Br[a][b] = w->Br[a][b]; Cr[a][b] = w->Cr[a][b]; }
+        { double hw[NMAX], nn = 0; for (int i = 0; i < m; i++) { hw[i] = 1 / sqrt(m) - (i == m - 1); nn += hw[i] * hw[i]; }
+          for (int i = 0; i < m; i++) for (int k = 0; k < n1; k++) V[i][k] = (i == k) - 2 * hw[i] * hw[k] / nn; }
+        for (int k = 0; k < n1; k++) for (int l = 0; l < n1; l++) { double x = 0, y = 0;
+            for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { x += V[i][k] * Ar[i][j] * V[j][l]; y += V[i][k] * Br[i][j] * V[j][l]; }
+            Ah[k][l] = x; Bh[k][l] = y; }
+        { double *H = malloc(sizeof(double) * n1 * n1), wk[64 * NMAX]; int lw = 64 * NMAX, info;
+          for (int pass = 0; pass < 2; pass++) { double (*M)[NMAX] = pass ? Bh : Ah, (*U)[NMAX] = pass ? UB : UA; double *ev2 = pass ? mu : lam;
+            for (int k = 0; k < n1; k++) for (int l = 0; l < n1; l++) H[k + l * n1] = M[k][l];
+            dsyev_("V", "U", &n1, H, &n1, ev2, wk, &lw, &info);
+            for (int k = 0; k < n1; k++) for (int l = 0; l < n1; l++) U[k][l] = H[k + l * n1]; }
+          free(H); }
+        for (int i = 0; i < m; i++) for (int k = 0; k < n1; k++) { double x = 0, y = 0; for (int r = 0; r < n1; r++) { x += V[i][r] * UA[r][k]; y += V[i][r] * UB[r][k]; } WA[i][k] = x; WB[i][k] = y; }
+        double sv[NMAX], tv[NMAX];
+        { static double c[NMAX][NMAX]; int rs[NMAX]; double u[NMAX + 1], v[NMAX + 1];
+          for (int k = 0; k < n1; k++) for (int l = 0; l < n1; l++) c[k][l] = lam[k] * mu[l];
+          lap(n1, c, rs, u, v); for (int k = 0; k < n1; k++) { sv[k] = u[k]; tv[k] = v[k]; } }
+        static double D[NMAX][NMAX], S[NMAX][NMAX], T[NMAX][NMAX], X[NMAX][NMAX], G[NMAX][NMAX], Y[NMAX][NMAX], Sh[NMAX][NMAX], Th[NMAX][NMAX];
+        memset(D, 0, sizeof D);
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) X[i][j] = 1.0 / m;
+        double *HH = malloc(sizeof(double) * NN * NN), *AV = malloc(sizeof(double) * NN * NMAX), *ew = malloc(sizeof(double) * NN), *wk2 = NULL;
+        for (int k = 0; k < n1; k++) for (int k2 = 0; k2 < n1; k2++) for (int i = 0; i < m; i++) AV[(k * n1 + k2) * NMAX + i] = V[i][k] * V[i][k2];
+        double best = -INFINITY, t0 = now(), teig = 0; int lwq = -1, info; double wq; dsyev_("N", "U", &NN, HH, &NN, ew, &wq, &lwq, &info); lwq = (int)wq; wk2 = malloc(sizeof(double) * lwq);
+        #define MM(R, P, Q) for (int i_ = 0; i_ < m; i_++) for (int j_ = 0; j_ < m; j_++) { double z_ = 0; for (int k_ = 0; k_ < m; k_++) z_ += P[i_][k_] * Q[k_][j_]; R[i_][j_] = z_; }
+        for (int it = 0; it <= OUT; it++) {
+            for (int k = 0; k < n1; k++) for (int l = 0; l < n1; l++) { double x = 0, y = 0; for (int r = 0; r < n1; r++) { x += UA[k][r] * sv[r] * UA[l][r]; y += UB[k][r] * tv[r] * UB[l][r]; } Sh[k][l] = x; Th[k][l] = y; }
+            for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { double x = 0, y = 0; for (int r = 0; r < n1; r++) { x += WA[i][r] * sv[r] * WA[j][r]; y += WB[i][r] * tv[r] * WB[j][r]; } S[i][j] = x; T[i][j] = y; }
+            /* exact convexity check on the affine hull, repair by a uniform shift of s */
+            double te = now();
+            for (int k = 0; k < n1; k++) for (int k2 = 0; k2 < n1; k2++) { const double *a = AV + (k * n1 + k2) * NMAX; double Da[NMAX];
+                for (int j = 0; j < m; j++) { double z = 0; for (int i = 0; i < m; i++) z += a[i] * D[i][j]; Da[j] = z; }
+                for (int l = 0; l < n1; l++) for (int l2 = 0; l2 < n1; l2++) { const double *b = AV + (l * n1 + l2) * NMAX; double z = 0; for (int j = 0; j < m; j++) z += Da[j] * b[j];
+                    HH[(k * n1 + l) + (size_t)(k2 * n1 + l2) * NN] = Ah[k][k2] * Bh[l][l2] - Sh[k][k2] * (l == l2) - (k == k2) * Th[l][l2] - z; } }
+            dsyev_("N", "U", &NN, HH, &NN, ew, wk2, &lwq, &info); teig += now() - te;
+            double lmin = ew[0], marg = 1e-7 * (1 + fabs(ew[NN - 1]));
+            if (lmin < marg) { double c = marg - lmin; for (int k = 0; k < n1; k++) sv[k] -= c;
+                for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { double x = 0; for (int r = 0; r < n1; r++) x += WA[i][r] * WA[j][r]; S[i][j] -= c * x; } }
+            double cst = K; for (int k = 0; k < n1; k++) cst += sv[k] + tv[k];
+            /* Frank-Wolfe on q over the doubly stochastic matrices */
+            double lb = -INFINITY, qx = 0;
+            for (int f = 0; f < INN; f++) {
+                static double AX[NMAX][NMAX], AXB[NMAX][NMAX], SX[NMAX][NMAX], XT[NMAX][NMAX];
+                MM(AX, Ar, X); MM(AXB, AX, Br); MM(SX, S, X); MM(XT, X, T);
+                double qv = cst, gx = 0;
+                for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { double hx = AXB[i][j] - SX[i][j] - XT[i][j] - D[i][j] * X[i][j];
+                    qv += X[i][j] * (hx + Cr[i][j] + D[i][j]); G[i][j] = 2 * hx + Cr[i][j] + D[i][j]; gx += G[i][j] * X[i][j]; }
+                int rs[NMAX]; double u[NMAX + 1], v[NMAX + 1]; double lp = lap(m, G, rs, u, v);
+                double l1 = qv + lp - gx; if (l1 > lb) lb = l1; qx = qv;
+                for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) Y[i][j] = (rs[i] == j) - X[i][j];
+                MM(AX, Ar, Y); MM(AXB, AX, Br); MM(SX, S, Y); MM(XT, Y, T);
+                double gy = 0, cy = 0; for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { gy += G[i][j] * Y[i][j]; cy += Y[i][j] * (AXB[i][j] - SX[i][j] - XT[i][j] - D[i][j] * Y[i][j]); }
+                double gam = cy > 1e-12 ? -gy / (2 * cy) : 1; if (gam > 1) gam = 1; if (gam < 0) gam = 0;
+                for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) X[i][j] += gam * Y[i][j];
+            }
+            if (lb > best) best = lb;
+            if (getenv("VERB")) fprintf(stderr, "it %d lb %.2f q %.2f lmin %.3g best %.2f t %.3f\n", it, lb, qx, lmin, best, now() - t0);
+            if (best > thr || it == OUT) break;
+            /* supergradient of phi at X, Polyak step towards thr */
+            static double gD[NMAX][NMAX]; double gs[NMAX], gt[NMAX], g2 = 0;
+            for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) { gD[i][j] = X[i][j] - X[i][j] * X[i][j]; g2 += gD[i][j] * gD[i][j]; }
+            for (int k = 0; k < n1; k++) { double a = 0, b = 0; for (int j = 0; j < m; j++) { double x = 0, y = 0; for (int i = 0; i < m; i++) { x += X[i][j] * WA[i][k]; y += X[j][i] * WB[i][k]; } a += x * x; b += y * y; }
+                gs[k] = 1 - a; gt[k] = 1 - b; g2 += gs[k] * gs[k] + gt[k] * gt[k]; }
+            double eta = theta * (thr + 1 - lb) / (g2 + 1e-12);
+            for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) D[i][j] += eta * gD[i][j];
+            for (int k = 0; k < n1; k++) { sv[k] += eta * gs[k]; tv[k] += eta * gt[k]; }
+        }
+        printf("{\"m\":%d,\"qpb\":%.2f,\"qpbd\":%.2f,\"t_qpb\":%.5f,\"t\":%.4f,\"t_eig\":%.4f}\n", m, ev.z, best, tq, now() - t0, teig);
+        return 0;
+    }
     if (!strcmp(mode, "root")) {
         work_t *w = calloc(1, sizeof(work_t)); node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
         if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;   /* FIX="i:j i:j ...": evaluate that node */

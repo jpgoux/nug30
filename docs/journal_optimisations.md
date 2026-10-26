@@ -219,3 +219,21 @@ Principe : on ajoute à la fonction de QPB le terme Σ D_ij x_ij (1 − x_ij), n
 Héritage testé (nug14, nœud de profondeur 4, m = 10) : la fonction convexe tirée de la SDP du nœud, réutilisée chez ses 10 enfants et 30 petits-enfants, est toujours moins bonne que leur propre QPB (−5 à −19 chez les enfants, −7 à −38 chez les petits-enfants). Le gain de D n'existe qu'au nœud où il est calculé.
 Arbre de nug12 avec la meilleure borne QPB + D (SDP, Python, hors du solveur), ordre de branchement fixe, D calculé seulement aux nœuds que QPB n'élague pas, 12 sous-arbres de profondeur 2 tirés au hasard (graine 7) : 453 nœuds contre 1 075 avec QPB seule (× 2,4) ; 121 calculs de D, dont 72 élaguent. Insuffisant pour payer un calcul de D 20 à 200 fois plus cher qu'un nœud QPB, sauf si le facteur croît nettement avec la taille.
 Même mesure sur nug14 (nuit du 25 au 26 octobre) : arrêtée sans résultat. À 12 usines libres, la SDP en Python prend environ 3 Go et plusieurs minutes par nœud ; quatre calculs simultanés dépassaient la mémoire, et à deux, deux sous-arbres n'étaient pas finis après 1 h 40 chacun. La question qui décide est le coût de D en C (Lanczos pour guider D, Cholesky seulement avant un élagage), à mesurer directement.
+
+### Test en C de la borne « QPB + D » (26 octobre)
+
+Mode `dbound` ajouté à `src/qap_bb.c` (nœud donné par la variable `FIX`). Il part des s, t optimaux de QPB, monte sur (s, t, D) par sous-gradient avec pas de Polyak, résout chaque fonction par Frank-Wolfe, et vérifie la convexité à chaque pas par la plus petite valeur propre exacte (LAPACK `dsyev`) du hessien restreint, de taille (m−1)² × (m−1)². Quand cette valeur propre est négative, la réparation retranche le même décalage à tous les s ; la borne reste alors valide.
+
+Résultat sur le nœud nug14 de profondeur 4 (m = 10 ; QPB 976,9, optimum SDP 989,3) : la meilleure borne certifiée reste à 976,9 quel que soit le pas (θ de 0,01 à 1). Chaque pas fait perdre la convexité, et la réparation coûte plus que le gain (perte de l'ordre de |λ_min| fois (m − 1)). Pour suivre l'optimum SDP sans perdre la convexité, il faut une méthode de type SDP (ADMM ou faisceau spectral), donc au moins une décomposition propre complète par itération, et souvent des centaines d'itérations.
+
+Coût d'une seule décomposition propre (valeurs propres seules, un cœur) :
+
+| m | taille | temps |
+|---|---|---|
+| 10 | 81 | 0,46 ms |
+| 14 | 169 | 2,3 ms |
+| 17 | 256 | 6,6 ms |
+| 22 | 441 | 27 ms |
+| 26 | 625 | 76 ms |
+
+Un nœud QPB coûte 0,1 à 0,24 ms. Sur nug12, l'arbre QPB + D (453 nœuds QPB et 121 appels à D) contre 1 075 nœuds QPB donne le seuil de rentabilité : un appel à D doit coûter moins d'environ 5 nœuds QPB. Une seule décomposition propre dépasse ce seuil dès m = 14. Conclusion : la borne QPB + D n'est pas rentable sur CPU sous cette forme, sauf si le gain d'arbre grandit beaucoup avec la taille, ce que nous n'avons pas pu mesurer (nug14 arrêté).
