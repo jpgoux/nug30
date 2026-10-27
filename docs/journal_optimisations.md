@@ -563,3 +563,50 @@ Un enfant hérité coûte 0,85 ms et s'élague dans 77 à 89 % des cas avec une 
 | -hybi 40 100 20 | > 476 672 | arrêté à 1 800 s | |
 
 L'arbre ne baisse que de 14 % et le temps est multiplié par 18. La montée héritée gagne +47 en moyenne, mais elle part d'un état faible : au sommet de nug20 (m = 17), 300 itérations à froid laissent RLT1 sous QPB (voir plus haut : 2 333 contre 2 385 après 2 000 itérations), et l'héritage ne rattrape pas l'écart à temps. Pour qu'il paie, il faudrait un départ à froid de la qualité du LP au sommet, que nous ne savons pas obtenir en moins d'une seconde par nœud. La voie RLT1 est fermée sur CPU dans cette forme.
+
+### Validation sur nug27 et nug28 : la règle retenue perd (27 octobre, 08 h 58 à 09 h 21 UTC)
+
+Avant toute résolution complète, estimateur de Knuth (stratégie D, borne haute à l'optimum plus un, `-nointprune -q 1.5 -top 3 -dives 1000`), binaire b75, un cœur par calcul, machine chargée (les temps sont donc pessimistes ; les nœuds ne dépendent que de la graine).
+
+| instance, graine | règle de 2001 | `-brtie -brecc 4 6 -brdyn` | rapport des nœuds | rapport des temps |
+|---|---|---|---|---|
+| nug27, 11 | 2,57e8 nœuds, 1,27e5 s | 5,75e8 nœuds, 2,30e5 s | ×2,24 | ×1,81 |
+| nug27, 13 | 4,47e8 nœuds, 1,30e5 s | 1,03e9 nœuds, 2,63e5 s | ×2,31 | ×2,03 |
+| nug28, 11 | 2,18e9 nœuds, 8,09e5 s | 3,27e9 nœuds, 1,29e6 s | ×1,50 | ×1,60 |
+
+Les deux parties de la règle, mesurées seules sur nug27 (graine 11) :
+
+| réglage | nœuds | temps estimé |
+|---|---|---|
+| départage des ex aequo seul (`-brtie -brdyn`) | 5,50e8 (×2,14) | 2,05e5 s |
+| case excentrée imposée seule (`-brecc 4 6 -brdyn`) | 4,57e8 (×1,78) | 1,46e5 s |
+
+Les deux parties dégradent nug27. La règle avait été choisie sur nug20, nug22, nug24 et quatre graines de nug30, où elle gagnait de ×1,3 à ×2,4 ; elle ne se transporte pas d'une instance à l'autre. Conséquence pour la méthode : une règle de branchement se choisit par instance, sur estimation (une vingtaine de minutes de calcul), et le gain sur nug30 reste celui mesuré sur nug30. nug28 avec la règle de 2001 vaut environ 225 heures-cœur estimées : hors de portée d'une résolution complète ici ; nug27 environ 35.
+
+### Arrêt de Frank-Wolfe dès que l'élagage est impossible (27 octobre, 09 h 00 à 10 h 15 UTC)
+
+Option `-fwlog fichier k` : un appel de Frank-Wolfe sur k est écrit itération par itération (seuil moins meilleure borne, valeur du QP moins seuil). nug20, règle retenue, k = 5 : 29 % des itérations ont lieu alors que la valeur du QP f(X) est déjà sous le seuil. f(X) décroît le long de Frank-Wolfe et majore la borne, donc ces itérations ne peuvent plus élaguer le nœud ; elles servent seulement à affiner les coûts réduits du branchement (règle 2) et les bornes des enfants anticipés (règle 3). Dans les enfants anticipés, rien n'arrêtait le calcul avant la limite d'itérations.
+
+Option `-fstop km kl` : arrêt dès que f(X) passe sous le seuil, après km itérations au nœud et kl dans un enfant anticipé (0 garde la règle de 2001).
+
+| instance, branchement | réglage | nœuds | itérations FW | temps |
+|---|---|---|---|---|
+| nug22, règle retenue | 2001 | 1 033 874 | 21,7 M | 166 à 170 s |
+| nug22, règle retenue | -fstop 1 1 | 1 108 657 | 16,6 M | 147 à 149 s (÷1,13) |
+| nug22, règle retenue | -fstop 1 0 | 1 166 589 | 19,8 M | 170 s |
+| nug22, règle retenue | -fstop 0 1 | 1 475 024 | 24,2 M | 188 s |
+| nug22, règle de 2001 | 2001 | 1 633 944 | 28,8 M | 210 s |
+| nug22, règle de 2001 | -fstop 1 1 | 1 742 364 | 22,2 M | 181 s (÷1,16) |
+| nug24, règle retenue | 2001 | 15 425 124 | | 2 153 s |
+| nug24, règle retenue | -fstop 1 1 | plus de 26 682 112 | | arrêté à 2 735 s, au 3e fils de la racine sur 6 |
+
+Quatre calculs à la fois sur la machine. Le gain de nug22 ne tient pas sur nug24 : l'arbre y double au moins. Comme pour la règle de branchement, un réglage choisi sur les petites instances ne se transporte pas ; il se juge sur nug30 (estimations, graines 11 et 13, en cours).
+
+**Jugé sur nug30 (10 h 40 UTC).** Estimations, règle retenue, binaire b77 ; sans l'option, les nœuds reproduisent à l'identique ceux de 03 h 00.
+
+| graine | arrêt de 2001 | -fstop 1 1 | rapport des nœuds | rapport des temps |
+|---|---|---|---|---|
+| 11 | 5,95e9 nœuds, 2,20e6 s | 3,55e10 nœuds, 1,10e7 s | ×6,0 | ×5,0 |
+| 13 | 9,93e9 nœuds, 3,03e6 s | 2,81e10 nœuds, 1,08e7 s | ×2,8 | ×3,6 |
+
+Voie fermée. Les itérations faites après que f(X) est passé sous le seuil pèsent d'autant plus que l'arbre est profond : elles affinent les coûts réduits qui éliminent des enfants sans les évaluer. Essai suivant, dans le sens inverse : limites d'itérations ×1,0 et ×1,4 au lieu de 0,7 (réglé sur nug22), sur nug30 directement.

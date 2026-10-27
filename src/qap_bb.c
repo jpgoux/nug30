@@ -50,6 +50,12 @@ static void print_teig(void) { if (g_timeig) fprintf(stderr, "eig: %.2f s in %ld
 static int opt_dom = 0;   /* -dom: prune a node whose partial assignment is improved by swapping two fixed facilities, whatever the completion */
 static long g_dom_pruned = 0;
 static long g_fwstat[2][2]; static int g_gapstat = 0; static long g_gaph[2][7];
+/* -fwlog file k: one line per k-th Frank-Wolfe call: depth, m, nfw, nfw2, iterations, exit (1 fathomed,
+ * 2 rule nfw2, 3 limit, 4 other), then per iteration target - best and f(X) - target */
+/* -fstop km kl: stop Frank-Wolfe once f(X) < target (no fathom possible) after km iterations at a node,
+ * kl in a look-ahead child, instead of waiting for nfw2; 0 keeps nfw2 */
+static int opt_fstopm = 0, opt_fstopl = 0;
+static FILE *g_fwlog = NULL; static long g_fwlog_k = 1, g_fwlog_n = 0; static __thread int tl_depth = 0;
 static void print_glb(void) { if (opt_glbpre >= 0) fprintf(stderr, "glb: %ld calls, %ld fathomed\n", g_glbcalls, g_glbfath); }
 static void print_gap(void) { if (!g_gapstat) return; for (int h = 0; h < 2; h++) { fprintf(stderr, "branching nodes with f(X) %s thr, gap thr - z in <1, <2, <5, <10, <20, <50, more:", h ? ">=" : "<"); for (int b = 0; b < 7; b++) fprintf(stderr, " %ld", g_gaph[h][b]); fputc('\n', stderr); } }   /* serial search: [fathomed][count, FW iterations] of the nodes evaluated */
 static int opt_dombr = 0;   /* -dombr: also drop dominated children when branching (and count them out in rule 2) */   /* -fb: pairs eliminated by z + U at a node stay forbidden in its subtree */
@@ -842,6 +848,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
     int p[NMAX];
     double hist_best_at[8]; int it;
     int nfwc = nfw;
+    int nfwstop = nfw2, fsk = tl_noext ? opt_fstopl : opt_fstopm; if (fsk > 0 && fsk < nfwstop) nfwstop = fsk;
+    int lg = g_fwlog && (g_fwlog_n++ % g_fwlog_k) == 0, lgx = 4; double lgz[512], lgf[512];
     for (it = 0; it < nfwc; it++) {
         /* -ext k d: at the last allowed iteration, if f(X) is still above the target (the node may
          * still be fathomed) and the bound is within d of it, allow k more iterations, up to
@@ -894,7 +902,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         if (ns) { int k = 0; for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) if (w->fbl[i][j]) w->G[i][j] = gsave[k++]; }
 
-        if (best > target) { it++; break; }
+        if (lg && it < 512) { lgz[it] = target - best; lgf[it] = f + K - target; }
+        if (best > target) { it++; lgx = 1; break; }
         double xmp = 0;
         applyMperm(w, m, p, w->MP, opt_fuse ? &xmp : NULL);
         /* cost of the permutation p (upper bound) */
@@ -981,7 +990,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         /* termination rule of Brixius-Anstreicher: stop at NFW2 if the QP
          * value f(X_k) is already below the incumbent (cannot fathom) */
-        if (it + 1 >= nfw2 && f + K < target) {
+        if (it + 1 >= nfwstop && f + K < target) {
             /* before giving up, one S, T update may lift f above the target */
             if (opt_updstop && update_st(w, m)) {
                 applyM(w, m, w->X, w->MX);
@@ -990,8 +999,14 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
                 for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
                 if (f + K >= target) continue;
             }
-            it++; break;
+            it++; lgx = 2; break;
         }
+    }
+    if (lg) {
+        if (lgx == 4 && it >= nfwc) lgx = 3;
+        char buf[512 * 24 + 64]; int o = sprintf(buf, "%d %d %d %d %d %d", tl_depth, m, nfw, nfw2, it, lgx);
+        for (int k = 0; k < it && k < 512; k++) o += sprintf(buf + o, " %.1f %.1f", lgz[k], lgf[k]);
+        buf[o++] = '\n'; fwrite(buf, 1, o, g_fwlog);
     }
     (void)hist_best_at;
     static int trace = -1; if (trace < 0) trace = getenv("QPB_TRACE") != NULL;
@@ -1507,6 +1522,7 @@ static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw
         for (int a2 = 0; a2 < m; a2++) for (int b = 0; b < m; b++) w->U[a2][b] = 0;
         return;
     }
+    tl_depth = nd->depth;
     if (opt_topd >= 0 && nd->depth <= opt_topd && !tl_noext) { nfw = (int)(nfw * opt_topx); nfw2 = (int)(nfw2 * opt_topx); }
     if (opt_glbpre >= 0 && nd->depth >= opt_glbpre && m > 2) {
         /* -glbpre d: Gilmore-Lawler bound first, from depth d on. For a completion p of the node,
@@ -2422,6 +2438,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-r2p")) opt_r2p = atof(argv[++a]);
         else if (!strcmp(argv[a], "-ext")) { opt_ext = atoi(argv[++a]); opt_extd = atof(argv[++a]); }
         else if (!strcmp(argv[a], "-extn")) opt_extn = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-fstop")) { opt_fstopm = atoi(argv[++a]); opt_fstopl = atoi(argv[++a]); }
+        else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
         else if (!strcmp(argv[a], "-gapstat")) { g_gapstat = 1; atexit(print_gap); }
         else if (!strcmp(argv[a], "-timeig")) { g_timeig = 1; atexit(print_teig); }
         else if (!strcmp(argv[a], "-dom3")) opt_dom = 3;
