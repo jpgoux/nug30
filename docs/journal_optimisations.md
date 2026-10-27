@@ -487,3 +487,14 @@ Huit traits par ligne ex aequo (ligne ou colonne, excentricité sur cases libres
 | ligne la plus excentrée (cases libres) | | 1,12 | 1,42 | 1,07 | 1,06 | 1,03 |
 
 Aucune règle apprise ne fait mieux, hors de son fichier, que « la ligne de la case la plus excentrée parmi les cases libres », c'est-à-dire `-brtie -brdyn`. Avec ces traits bon marché, la règle actuelle est au plafond ; le reste du gain de l'oracle demande une information que seuls les sous-arbres donnent.
+
+### nug30 : temps estimé avec la règle retenue (27 octobre, 03 h 25 UTC)
+
+Quatre estimations lancées ensemble à 03 h 00 sur la machine libre (quatre cœurs, rien d'autre), même protocole, binaire b74 :
+
+| graine | règle de 2001 | -brtie -brecc 4 6 -brdyn | rapport |
+|---|---|---|---|
+| 11 | 1,274e10 nœuds, 4,07e6 s | 5,95e9 nœuds, 2,02e6 s | ÷2,02 |
+| 13 | 2,266e10 nœuds, 6,40e6 s | 9,93e9 nœuds, 2,92e6 s | ÷2,19 |
+
+Les nœuds estimés sont identiques aux calculs précédents (estimateur déterministe à graine fixée). Temps estimé : 560 à 810 heures-cœur au lieu de 1 130 à 1 780. L'objectif d'une journée sur quatre cœurs (96 heures-cœur) demande encore un facteur 6 à 8.
