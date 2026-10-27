@@ -498,3 +498,16 @@ Quatre estimations lancées ensemble à 03 h 00 sur la machine libre (quatre cœ
 | 13 | 2,266e10 nœuds, 6,40e6 s | 9,93e9 nœuds, 2,92e6 s | ÷2,19 |
 
 Les nœuds estimés sont identiques aux calculs précédents (estimateur déterministe à graine fixée). Temps estimé : 560 à 810 heures-cœur au lieu de 1 130 à 1 780. L'objectif d'une journée sur quatre cœurs (96 heures-cœur) demande encore un facteur 6 à 8.
+
+### Itérations de Frank-Wolfe sous la nouvelle règle (27 octobre, 03 h 27 UTC)
+
+Le facteur 0,7 appliqué aux limites d'itérations des tables de 2001 avait été réglé avec l'ancienne règle de branchement. nug22, stratégie C, `-brtie -brecc 4 6 -brdyn`, quatre calculs ensemble :
+
+| -nfwx | nœuds | itérations FW | temps CPU |
+|---|---|---|---|
+| 0,5 | 1 342 379 | 14,1 M | 103,0 s |
+| 0,7 | 1 095 083 | 14,3 M | 99,5 s |
+| 0,9 | 1 066 172 | 16,5 M | 106,5 s |
+| 1,1 | 1 043 588 | 18,7 M | 114,4 s |
+
+0,7 reste le meilleur réglage.
