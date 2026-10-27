@@ -355,3 +355,15 @@ Arbres complets, stratégie C, symétries et parité, option `-brecc lo hi` (la 
 | nug22 | -brecc 0 30 | 1 339 051 (×1,33) | 14,6 M |
 
 Le réglage des profondeurs a été choisi sur nug20 ; nug22 sert de contrôle et le gain s'y retrouve (×1,33 à ×1,38, y compris avec la règle appliquée partout). Les temps de ces essais ont été pris avec quatre calculs en parallèle et ne sont pas comparables entre eux ; le travail (itérations de Frank-Wolfe) suit les nœuds. Mesure propre des temps et estimation sur nug30 à suivre.
+
+Estimation nug30 (`estimate -strat D -ub 6125 -nointprune -top 3 -dives 2000`, la règle 2 commence à la profondeur 5 en stratégie D, donc `-brecc 4 6` agit aux profondeurs 5 et 6) :
+
+| graine | règle | nœuds estimés | temps estimé (un cœur) |
+|---|---|---|---|
+| 11 | actuelle | 1,27e10 | 3,18e6 s |
+| 11 | -brecc 4 6 | 6,66e9 (×1,91) | 1,67e6 s (×1,91) |
+| 11 | -brecc 0 30 | 7,52e9 (×1,69) | 1,77e6 s (×1,80) |
+| 7 | actuelle (b65, même arbre que b69) | 2,53e10 | 8,15e6 s |
+| 7 | -brecc 4 6 | 1,78e10 (×1,42) | 4,06e6 s (×2,01) |
+
+Contrôle : à graine égale, l'ancien binaire b65 et le nouveau donnent la même estimation sans `-brecc` (7,829e9 sur la première moitié de la frontière de la graine 11). Le gain sur nug30 est du même ordre que sur nug20 et nug22. Temps total estimé : 1,7e6 à 4,1e6 s sur un cœur, soit 5 à 12 jours sur 4 cœurs au lieu de 9 à 24. Une estimation à 2 000 plongées varie du simple au double d'une graine à l'autre ; les rapports à graine égale sont plus fiables que les valeurs absolues.
