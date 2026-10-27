@@ -536,4 +536,4 @@ Sur les quatre graines (11, 13, 7, 17) : nœuds divisés par 2,14 ; 2,28 ; 1,80 
 
 ### nug24 en temps propre (27 octobre, 05 h 00 UTC)
 
-Deux calculs lancés ensemble à 04 h 20 sur la machine libre (stratégie D, ub = 3489, `-nointprune`, binaire b74) : avec `-brtie -brecc 4 6 -brdyn`, 15 425 124 nœuds, 233,5 M itérations, 1 962 s ; avec la règle de 2001, calcul encore en cours à 05 h 00 (plus de 2 400 s). Résultat complet à relever dans `runs/n24clean/base.json`.
+Deux calculs lancés ensemble à 04 h 20 sur la machine libre (stratégie D, ub = 3489, `-nointprune`, binaire b74) : avec `-brtie -brecc 4 6 -brdyn`, 15 425 124 nœuds, 233,5 M itérations, 1 962 s ; avec la règle de 2001, 22 784 046 nœuds, 324,7 M itérations, 2 570 s. Rapport ×1,48 en nœuds, ×1,39 en itérations, **×1,31 en temps**.
