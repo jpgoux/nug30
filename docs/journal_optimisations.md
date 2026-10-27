@@ -469,5 +469,7 @@ Même protocole que plus haut (stratégie D, ub = 6125, `-nointprune -q 1.5 -top
 | -brtie -brecc 4 6 | 6,82e9 (×1,87) | |
 | -brtie -brecc 4 6 -brdyn | **5,95e9 (×2,14)** | **9,93e9 (×2,28)** |
 | -brtie -brecc 4 6 -brdyn -brall | 7,74e9 (×1,65) | |
+| -brtie -brecc 4 10 -brdyn | 5,82e9 (×2,19) | 1,145e10 (×1,98) |
+| -brecc 4 6 -nb3 20 | 6,41e9 (×1,99) | |
 
-L'excentricité sur les cases libres gagne encore 5 à 12 % sur nug30 (grille 5 × 6). Remplacer l'anticipation de la profondeur 4 par la case excentrée (`-brall`) fait perdre : l'anticipation reste utile au sommet de l'arbre. Les temps estimés ne se comparent pas ici (calculs lancés à des heures et charges différentes).
+L'excentricité sur les cases libres gagne encore 5 à 12 % sur nug30 (grille 5 × 6). Étendre la règle jusqu'à la profondeur 10 ne gagne plus de façon régulière (mieux pour la graine 11, moins bien pour la graine 13) : les profondeurs 5 et 6 restent le réglage de nug30. Remplacer l'anticipation de la profondeur 4 par la case excentrée (`-brall`) fait perdre : l'anticipation reste utile au sommet de l'arbre. Les temps estimés ne se comparent pas ici (calculs lancés à des heures et charges différentes).
