@@ -473,3 +473,17 @@ Même protocole que plus haut (stratégie D, ub = 6125, `-nointprune -q 1.5 -top
 | -brecc 4 6 -nb3 20 | 6,41e9 (×1,99) | |
 
 L'excentricité sur les cases libres gagne encore 5 à 12 % sur nug30 (grille 5 × 6). Étendre la règle jusqu'à la profondeur 10 ne gagne plus de façon régulière (mieux pour la graine 11, moins bien pour la graine 13) : les profondeurs 5 et 6 restent le réglage de nug30. Remplacer l'anticipation de la profondeur 4 par la case excentrée (`-brall`) fait perdre : l'anticipation reste utile au sommet de l'arbre. Les temps estimés ne se comparent pas ici (calculs lancés à des heures et charges différentes).
+
+### Règle apprise pour départager les ex aequo (27 octobre, 03 h 10 UTC)
+
+Huit traits par ligne ex aequo (ligne ou colonne, excentricité sur cases libres et sur toute la grille, somme de U, moyenne, minimum et maximum de U sur les enfants vivants, deuxième plus petit U, tous rapportés à l'écart seuil − z), score linéaire, poids cherchés au hasard (3 000 tirages) sur un fichier d'oracle et évalués sur les autres (script `src/experiments/oracle_tiefit.py`). Rapport de la règle par défaut à la règle testée, sur les seuls nœuds à plusieurs ex aequo :
+
+| appris sur | sur son fichier (oracle des ex aequo) | nug20 p3 | nug20 p4 | nug22 p3 | nug22 p4 | nug20 p7 |
+|---|---|---|---|---|---|---|
+| nug20 p3 | 1,16 (1,63) | | 1,46 | 1,03 | 1,07 | 1,03 |
+| nug20 p4 | 1,47 (1,99) | 1,08 | | 1,02 | 1,07 | 1,03 |
+| nug22 p3 | 1,09 (1,27) | 1,13 | 1,35 | | 1,07 | 1,03 |
+| nug22 p4 | 1,29 (1,36) | 1,03 | 1,24 | 0,80 | | 0,99 |
+| ligne la plus excentrée (cases libres) | | 1,12 | 1,42 | 1,07 | 1,06 | 1,03 |
+
+Aucune règle apprise ne fait mieux, hors de son fichier, que « la ligne de la case la plus excentrée parmi les cases libres », c'est-à-dire `-brtie -brdyn`. Avec ces traits bon marché, la règle actuelle est au plafond ; le reste du gain de l'oracle demande une information que seuls les sous-arbres donnent.
