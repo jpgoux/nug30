@@ -443,3 +443,17 @@ Sur les nœuds échantillonnés par l'oracle, on recompte la règle 2 (ligne au 
 (rapport = taille de sous-arbre de la règle par défaut divisée par celle de la règle testée ; script `src/experiments/oracle_ties.py`). Le gain se joue donc dans le départage des ex aequo de la règle 2. Les critères tirés de la matrice des flux (usine au plus fort ou au plus faible flux total) et des bornes U font moins bien que la règle actuelle.
 
 L'usine 5 (numérotation à partir de 0), meilleure ligne dans 85 des 98 nœuds de profondeur 3 où elle est libre, n'est distinguée ni par son flux total (46, rang 13 sur 20) ni par la somme de sa colonne de U. Elle occupe le coin 19 de la grille dans la solution optimale de QAPLIB (`nug20.sln`, position 20 : usine 6 en numérotation à partir de 1). Hypothèse non vérifiée : brancher sur l'usine destinée à un coin a le même effet que brancher sur une case de coin, mais aucun critère statique testé ne la repère avant de connaître la solution.
+
+### Anticipation limitée aux ex aequo (27 octobre, 02 h 45 UTC)
+
+Option `-latie lo hi` (avec `-latiek k`, `-lanfw f`) : aux profondeurs de la règle 2 comprises entre lo et hi, quand plusieurs lignes partagent le plus petit nombre d'enfants vivants, l'anticipation de la règle 3 départage ces seules lignes (au plus k lignes et k colonnes, f itérations de Frank-Wolfe par enfant). nug20, protocole du compteur (stratégie C, ub = 2571, `-nointprune`), référence 992 813 nœuds et 15,6 M itérations :
+
+| réglage | nœuds | itérations FW |
+|---|---|---|
+| -latie 0 6 | 523 144 | 20,3 M |
+| -latie 0 30 | 450 918 | 21,4 M |
+| -latie 4 8 -lanfw 4 -latiek 3 | 912 594 | 20,2 M |
+| -latie 0 30 -lanfw 3 -latiek 2 | 982 032 | 19,3 M |
+| -brtie -brecc 4 5 -brdyn -latie 6 12 -lanfw 4 -latiek 3 | 647 280 | 11,8 M (contre 10,6 M sans -latie) |
+
+L'anticipation retrouve une partie du gain de l'oracle en nœuds (×2,2) mais coûte plus d'itérations qu'elle n'en économise ; avec moins d'itérations par enfant elle ne départage plus rien. Fermé. Les temps CPU (99 à 114 s contre 78 s) vont dans le même sens.

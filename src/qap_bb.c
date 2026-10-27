@@ -1597,7 +1597,7 @@ static int cmp_child(const void *a, const void *b) {
  * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
  * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
  * use U only through such single-pair bounds and sums of them). */
-static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0, opt_brdyn = 0, opt_laecc = 0, opt_brall = 0; static double opt_lak = 0; static double g_rowsumA[NMAX];
+static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0, opt_brdyn = 0, opt_laecc = 0, opt_brall = 0, opt_latie_lo = 0, opt_latie_hi = -1, opt_latiek = 8; static double opt_lak = 0; static double g_rowsumA[NMAX];
 static int opt_sens = 0;
 static void sharpen_U(work_t *w, int m) {
     if (!w->up_ok) return;
@@ -1662,12 +1662,14 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 for (int b = 0; b < m; b++) if (w->U[a2][b] > Ueff[a][b]) Ueff[a][b] = w->U[a2][b]; }
         }
     }
+    int cntR[NMAX], cntC[NMAX];   /* live children per line, for -latie */
     if (allow_row) for (int a = 0; a < m; a++) {
         int cnt = 0; double s = 0;
         double sc = 0;
         for (int b = 0; b < m; b++) if (repCol[b]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) { cnt++; if (opt_r2p > 0) sc += pow((thr - z - Ueff[a][b]) / (thr - z + 1e-9), opt_r2p); } s += Ueff[a][b]; }
         if (opt_r2p > 0) { if (sc < best_sc || (sc == best_sc && s > best_sum)) { best_sc = sc; best_cnt = cnt; best_sum = s; best_kind = 0; best_line = a; } }
         else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 0; best_line = a; }
+        cntR[a] = cnt;
     }
     if (allow_col) for (int b = 0; b < m; b++) {
         int cnt = 0; double s = 0;
@@ -1675,6 +1677,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         for (int a = 0; a < m; a++) if (repRow[a]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) { cnt++; if (opt_r2p > 0) sc += pow((thr - z - Ueff[a][b]) / (thr - z + 1e-9), opt_r2p); } s += Ueff[a][b]; }
         if (opt_r2p > 0) { if (sc < best_sc || (sc == best_sc && s > best_sum)) { best_sc = sc; best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; } }
         else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; }
+        cntC[b] = cnt;
     }
     double ecc[NMAX];   /* eccentricity of each free row: A row sum, over all rows or (-brdyn) over the free rows only */
     for (int a = 0; a < m; a++) { double t = 0; if (opt_brdyn) for (int c = 0; c < m; c++) t += A[ev->F[a]][ev->F[c]]; else t = g_rowsumA[ev->F[a]]; ecc[a] = t; }
@@ -1696,6 +1699,11 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
      * NBEST rows and NBEST columns with the largest sums of U (Rule 1 order). */
     const rule_t *R = rule_at(nd->depth);
     rule_t Rsz;
+    int latie = 0;   /* -latie lo hi: look-ahead restricted to the rule-2 ties */
+    if (R->rule == 2 && opt_latie_hi >= 0 && nd->depth >= opt_latie_lo && nd->depth <= opt_latie_hi && opt_r2p <= 0 && !brforced) {
+        int nt = 0; if (allow_row) for (int a = 0; a < m; a++) nt += cntR[a] == best_cnt; if (allow_col) for (int b = 0; b < m; b++) nt += cntC[b] == best_cnt;
+        if (nt > 1) { latie = 1; Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_latiek; Rsz.nfw3 = opt_lanfw; R = &Rsz; }
+    }
     if (R->rule == 2 && opt_lasize && m >= opt_lasize) {   /* look-ahead decided by the size of the subproblem */
         Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_lanb; Rsz.nfw3 = opt_lanfw; R = &Rsz;
     }
@@ -1707,6 +1715,10 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         if (allow_col) for (int b = 0; b < m; b++) { double s = 0; for (int a = 0; a < m; a++) if (repRow[a]) s += Ueff[a][b]; cols[ncl++] = (cand_t){1, b, s}; }
         for (int x = 0; x < nr; x++) for (int y = x + 1; y < nr; y++) if (rows[y].s > rows[x].s) { cand_t t = rows[x]; rows[x] = rows[y]; rows[y] = t; }
         for (int x = 0; x < ncl; x++) for (int y = x + 1; y < ncl; y++) if (cols[y].s > cols[x].s) { cand_t t = cols[x]; cols[x] = cols[y]; cols[y] = t; }
+        if (latie) {   /* keep only the tied lines, largest sum of U first */
+            int k = 0; for (int x = 0; x < nr; x++) if (cntR[rows[x].line] == best_cnt) rows[k++] = rows[x]; nr = k;
+            k = 0; for (int x = 0; x < ncl; x++) if (cntC[cols[x].line] == best_cnt) cols[k++] = cols[x]; ncl = k;
+        }
         for (int x = 0; x < nr && x < R->nbest; x++) cands[nc++] = rows[x];
         if (opt_laecc && allow_row) {   /* -laecc: the most eccentric free row is always a candidate */
             int be = 0; for (int a = 1; a < m; a++) if (ecc[a] > ecc[be]) be = a;
@@ -2381,6 +2393,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-brtie")) opt_brtie = 1;
         else if (!strcmp(argv[a], "-brdyn")) opt_brdyn = 1;
         else if (!strcmp(argv[a], "-brall")) opt_brall = 1;
+        else if (!strcmp(argv[a], "-latie")) { opt_latie_lo = atoi(argv[++a]); opt_latie_hi = atoi(argv[++a]); }
+        else if (!strcmp(argv[a], "-latiek")) opt_latiek = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-laecc")) opt_laecc = 1;
         else if (!strcmp(argv[a], "-lak")) opt_lak = atof(argv[++a]);
         else if (!strcmp(argv[a], "-brecc")) { opt_brecc_lo = atoi(argv[++a]); opt_brecc_hi = atoi(argv[++a]); }
