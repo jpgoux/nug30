@@ -1597,7 +1597,7 @@ static int cmp_child(const void *a, const void *b) {
  * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
  * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
  * use U only through such single-pair bounds and sums of them). */
-static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0; static double g_rowsumA[NMAX];
+static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0; static double opt_lak = 0; static double g_rowsumA[NMAX];
 static int opt_sens = 0;
 static void sharpen_U(work_t *w, int m) {
     if (!w->up_ok) return;
@@ -1717,7 +1717,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         static __thread double memo_z[NMAX][NMAX], memo_v[NMAX][NMAX];
         static __thread unsigned char memo_ok[NMAX][NMAX];
         memset(memo_ok, 0, sizeof memo_ok);
-        int capped = opt_lacap && R->rule == 3;
+        int capped = opt_lacap && R->rule == 3 && !(opt_lak > 0);
         for (int c = 0; c < nc; c++) {
             double score = 0;
             int ord[NMAX], nrem = 0;
@@ -1758,7 +1758,8 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                     memo_z[a][b] = zij; memo_v[a][b] = vij; memo_ok[a][b] = 1;
                 }
                 zline[o] = zij;
-                score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, capped ? thr : 1e15);
+                if (opt_lak > 0 && R->rule == 3) { if (zij <= thr) score -= exp(fmin(opt_lak * (thr - zij), 600)); }   /* -lak k: minimise the sum of exp(k gap) over the live children */
+                else score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, capped ? thr : 1e15);
             }
             if (aborted) continue;
             if (score > bestscore) { bestscore = score; bk = cands[c].kind; bl = cands[c].line; memcpy(zpro, zline, sizeof(double) * m); have_pro = 1; }
@@ -2369,6 +2370,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nointprune")) opt_intprune = 0;
         else if (!strcmp(argv[a], "-nopar")) opt_par = 0;
         else if (!strcmp(argv[a], "-brtie")) opt_brtie = 1;
+        else if (!strcmp(argv[a], "-lak")) opt_lak = atof(argv[++a]);
         else if (!strcmp(argv[a], "-brecc")) { opt_brecc_lo = atoi(argv[++a]); opt_brecc_hi = atoi(argv[++a]); }
         else if (!strcmp(argv[a], "-prog")) g_prog = argv[++a];
         else if (!strcmp(argv[a], "-ckpt")) opt_ckpt = argv[++a];

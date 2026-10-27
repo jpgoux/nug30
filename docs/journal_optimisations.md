@@ -380,3 +380,8 @@ Variante sans réglage de profondeur (option `-brtie`, 27 octobre, 01 h 05 UTC).
 Oracle à la profondeur 3 (règle 3 avec anticipation, 39 nœuds) : la meilleure ligne fait ×1,82 de moins ; c'est presque toujours la colonne de l'usine 5 (34 nœuds sur 39), sans que nous sachions encore quelle propriété des flots la distingue. La case la plus excentrée n'y donne que 0,86.
 
 Réglage sur nug30 (estimations, mêmes nœuds de frontière comparés, 70 % de la frontière) : graine 11, règle aux profondeurs 5-6 ×1,85 en nœuds et ×1,87 en temps, 5-8 ×1,84 et ×1,59, 5-12 ×1,57 et ×1,53 ; graine 7, 5-6 ×1,40 et ×1,83, 5-8 ×2,13 et ×1,55. Les profondeurs 5-6 restent le meilleur compromis en temps.
+
+Deux essais sur l'anticipation (niveaux 2 et 3 de la stratégie C, nug20 avec `-brtie -brecc 4 5`, référence 599 516 nœuds et 9,85 M d'itérations) :
+
+- Score « somme des exp(κ × écart au seuil) des enfants vivants » à minimiser (option `-lak κ`, qui désactive l'abandon anticipé des candidates) : κ = 0,05 donne 545 813 nœuds mais 12,5 M d'itérations ; κ = 0,15, 597 844 et 13,1 M. Rejeté : l'abandon anticipé vaut plus que le meilleur score.
+- Toutes les lignes comme candidates au niveau 3 (`-nb3 20` au lieu de 10) : nug20 499 598 nœuds pour 9,81 M d'itérations (×1,80 en nœuds sur la référence du jour), mais nug22 (`-nb3 22`) 1 246 333 nœuds contre 1 246 955, avec 16,7 M d'itérations contre 15,8 M. Le gain est propre à nug20, où l'oracle de profondeur 3 désigne presque toujours l'usine 5. Non retenu. Avec la règle 3 jusqu'à la profondeur 4 (`-c3 4`), nug20 tombe à 402 612 nœuds mais le travail double (20,2 M).
