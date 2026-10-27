@@ -619,3 +619,14 @@ Voie fermée. Les itérations faites après que f(X) est passé sous le seuil p�
 | 13 | 9,93e9 nœuds, 3,03e6 s | 8,45e9 nœuds, 3,09e6 s (×1,02) | 1,66e10 nœuds, 6,98e6 s (×2,30) |
 
 Pas de gain net : ×1,0 gagne environ 7 % en moyenne géométrique, dans l'écart entre graines ; ×1,4 diverge selon la graine. Le facteur 0,7 reste. La voie de la règle d'arrêt est close pour cette famille de réglages.
+
+### Fixation de paires par coûts réduits jugée sur nug30 (27 octobre, 13 h 10 à 13 h 37 UTC)
+
+Option `-fb` (écrite plus tôt, jamais jugée) : une paire (i, j) dont la borne du nœud plus le coût réduit dépasse le seuil est interdite dans tout le sous-arbre ; les LAP des descendants lui donnent un coût prohibitif. Estimations nug30, règle retenue, binaire b77, quatre calculs ensemble sur la machine libre :
+
+| graine | témoin | -fb | nœuds | temps |
+|---|---|---|---|---|
+| 11 | 5,945e9 nœuds, 2,34e6 s | 5,940e9 nœuds, 2,41e6 s | −0,1 % | +3 % |
+| 13 | 9,931e9 nœuds, 3,58e6 s | 9,856e9 nœuds, 3,66e6 s | −0,8 % | +2 % |
+
+Sans effet. La règle 2 élimine déjà ces enfants au nœud où le coût réduit les condamne ; plus bas, la contrainte relève rarement la borne de Frank-Wolfe, dont le point courant évite déjà ces paires.
