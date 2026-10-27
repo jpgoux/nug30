@@ -610,3 +610,12 @@ Quatre calculs à la fois sur la machine. Le gain de nug22 ne tient pas sur nug2
 | 13 | 9,93e9 nœuds, 3,03e6 s | 2,81e10 nœuds, 1,08e7 s | ×2,8 | ×3,6 |
 
 Voie fermée. Les itérations faites après que f(X) est passé sous le seuil pèsent d'autant plus que l'arbre est profond : elles affinent les coûts réduits qui éliminent des enfants sans les évaluer. Essai suivant, dans le sens inverse : limites d'itérations ×1,0 et ×1,4 au lieu de 0,7 (réglé sur nug22), sur nug30 directement.
+
+**Plus d'itérations sur nug30 (11 h 20 UTC).** Même protocole, quatre estimations ensemble.
+
+| graine | ×0,7 (actuel) | ×1,0 | ×1,4 |
+|---|---|---|---|
+| 11 | 5,95e9 nœuds, 2,20e6 s | 4,95e9 nœuds, 1,88e6 s (÷1,17) | 4,14e9 nœuds, 1,70e6 s (÷1,29) |
+| 13 | 9,93e9 nœuds, 3,03e6 s | 8,45e9 nœuds, 3,09e6 s (×1,02) | 1,66e10 nœuds, 6,98e6 s (×2,30) |
+
+Pas de gain net : ×1,0 gagne environ 7 % en moyenne géométrique, dans l'écart entre graines ; ×1,4 diverge selon la graine. Le facteur 0,7 reste. La voie de la règle d'arrêt est close pour cette famille de réglages.
