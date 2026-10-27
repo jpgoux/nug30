@@ -533,3 +533,7 @@ Quatre estimations lancées ensemble à 03 h 53, stratégie D :
 | 17 | 2,41e10 nœuds, 6,67e6 s | 1,02e10 nœuds, 3,85e6 s | ×2,36 | ÷1,73 |
 
 Sur les quatre graines (11, 13, 7, 17) : nœuds divisés par 2,14 ; 2,28 ; 1,80 ; 2,36 (moyenne géométrique ×2,13), temps estimé divisé par 2,02 ; 2,19 ; 1,63 ; 1,73 (moyenne géométrique ÷1,88). Heures-cœur estimées avec la règle retenue : 560 à 1 150 (moyenne 900), contre 1 130 à 1 860 (moyenne 1 650) avec la règle de 2001. L'écart entre graines reste du même ordre que le gain mesuré : une estimation à quatre graines donne la tendance, pas la valeur.
+
+### nug24 en temps propre (27 octobre, 05 h 00 UTC)
+
+Deux calculs lancés ensemble à 04 h 20 sur la machine libre (stratégie D, ub = 3489, `-nointprune`, binaire b74) : avec `-brtie -brecc 4 6 -brdyn`, 15 425 124 nœuds, 233,5 M itérations, 1 962 s ; avec la règle de 2001, calcul encore en cours à 05 h 00 (plus de 2 400 s). Résultat complet à relever dans `runs/n24clean/base.json`.
