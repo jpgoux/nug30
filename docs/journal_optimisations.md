@@ -522,3 +522,14 @@ Le facteur 0,7 appliqué aux limites d'itérations des tables de 2001 avait ét�
 | 13 | 1,73e10 nœuds, 4,88e6 s | 9,93e9 nœuds, 2,89e6 s |
 
 C gagne sur la graine 11 (×1,25 en temps) et perd nettement sur la graine 13 (×0,59) ; moyenne géométrique ×0,86 en faveur de D, que nous gardons. L'écart entre graines est grand pour C : avec moins d'anticipation au sommet, l'estimation dépend davantage des plongées tirées. Lancé ensuite : graines 7 et 17, règle de 2001 contre règle retenue, en stratégie D.
+
+### nug30 : graines 7 et 17 (27 octobre, 04 h 17 UTC)
+
+Quatre estimations lancées ensemble à 03 h 53, stratégie D :
+
+| graine | règle de 2001 | -brtie -brecc 4 6 -brdyn | nœuds | temps |
+|---|---|---|---|---|
+| 7 | 2,53e10 nœuds, 6,71e6 s | 1,41e10 nœuds, 4,13e6 s | ×1,80 | ÷1,63 |
+| 17 | 2,41e10 nœuds, 6,67e6 s | 1,02e10 nœuds, 3,85e6 s | ×2,36 | ÷1,73 |
+
+Sur les quatre graines (11, 13, 7, 17) : nœuds divisés par 2,14 ; 2,28 ; 1,80 ; 2,36 (moyenne géométrique ×2,13), temps estimé divisé par 2,02 ; 2,19 ; 1,63 ; 1,73 (moyenne géométrique ÷1,88). Heures-cœur estimées avec la règle retenue : 560 à 1 150 (moyenne 900), contre 1 130 à 1 860 (moyenne 1 650) avec la règle de 2001. L'écart entre graines reste du même ordre que le gain mesuré : une estimation à quatre graines donne la tendance, pas la valeur.
