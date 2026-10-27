@@ -511,3 +511,14 @@ Le facteur 0,7 appliqué aux limites d'itérations des tables de 2001 avait ét�
 | 1,1 | 1 043 588 | 18,7 M | 114,4 s |
 
 0,7 reste le meilleur réglage.
+
+### nug30 : stratégie C contre D avec la règle retenue (27 octobre, 03 h 52 UTC)
+
+`-brtie -brecc 4 6 -brdyn`, quatre estimations lancées ensemble à 03 h 27 :
+
+| graine | C | D |
+|---|---|---|
+| 11 | 5,30e9 nœuds, 1,76e6 s | 5,95e9 nœuds, 2,20e6 s |
+| 13 | 1,73e10 nœuds, 4,88e6 s | 9,93e9 nœuds, 2,89e6 s |
+
+C gagne sur la graine 11 (×1,25 en temps) et perd nettement sur la graine 13 (×0,59) ; moyenne géométrique ×0,86 en faveur de D, que nous gardons. L'écart entre graines est grand pour C : avec moins d'anticipation au sommet, l'estimation dépend davantage des plongées tirées. Lancé ensuite : graines 7 et 17, règle de 2001 contre règle retenue, en stratégie D.
