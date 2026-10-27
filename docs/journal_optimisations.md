@@ -395,3 +395,22 @@ Estimations nug30 complètes (27 octobre, 01 h 50 UTC), règle excentrée aux pr
 | 13 | 2,27e10 | 1,05e10 | ×2,17 | |
 
 Moyenne géométrique ×1,8 en nœuds. Les temps estimés dépendent de la charge de la machine pendant les plongées : ils ne se comparent qu'entre calculs lancés ensemble (graine 11 : ÷1,91 ; graine 13 : ÷2,02). Les profondeurs 5-8 et 5-12 font moins bien en temps (graine 11 : 1,96e6 et 2,02e6 s contre 1,67e6 s).
+
+### Excentricité sur les cases libres (27 octobre, 02 h 15 UTC)
+
+Option `-brdyn` : l'excentricité d'une case libre est la somme de ses distances aux seules cases encore libres du nœud, au lieu de toute la grille. Option `-laecc` : la case la plus excentrée est toujours ajoutée aux candidates de l'anticipation (aucun effet mesurable : nug20 599 380 nœuds contre 599 516, nug22 identique).
+
+Protocole du compteur (stratégie C, un cœur, ub = opt + 1, `-nointprune`), quatre calculs lancés ensemble ; temps CPU mesuré par getrusage, bruit d'environ ±15 % quand la machine est surchargée, d'où les itérations de Frank-Wolfe comme second indicateur :
+
+| instance | réglage | nœuds | itérations FW | temps CPU |
+|---|---|---|---|---|
+| nug22 | règle de 2001 | 1 908 513 | 23,9 M | 149,1 s |
+| nug22 | -brtie -brecc 4 6 | 1 331 837 | 16,8 M | 115,3 s (×1,29) |
+| nug22 | -brtie -brecc 4 6 -brdyn | 1 095 083 | 14,3 M | 98,3 s (×1,52) |
+| nug22 | -brtie -brecc 4 10 -brdyn | 1 143 223 | **12,5 M (×1,92)** | 96,1 s (×1,55) |
+| nug20 | règle de 2001 | 992 813 | 15,6 M | 78,3 s |
+| nug20 | -brtie -brecc 4 5 | 655 050 | 10,6 M | 58,9 s (×1,33) |
+| nug20 | -brtie -brecc 4 5 -brdyn | 656 114 | 10,6 M | 67,9 s |
+| nug20 | -brtie -brecc 4 10 -brdyn | 747 867 | 10,3 M (×1,52) | 61,1 s (×1,28) |
+
+Sur nug20 l'excentricité dynamique ne change rien (la grille 4 × 5 est presque carrée) ; sur nug22 (grille 2 × 11) elle compte. Les deux temps de nug20 à réglage presque identique (58,9 et 67,9 s pour 10,6 M d'itérations) donnent l'ordre du bruit. Estimations nug30 en cours.
