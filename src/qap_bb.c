@@ -1597,7 +1597,7 @@ static int cmp_child(const void *a, const void *b) {
  * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
  * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
  * use U only through such single-pair bounds and sums of them). */
-static int opt_brecc_lo = 0, opt_brecc_hi = -1; static double g_rowsumA[NMAX];
+static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0; static double g_rowsumA[NMAX];
 static int opt_sens = 0;
 static void sharpen_U(work_t *w, int m) {
     if (!w->up_ok) return;
@@ -1675,6 +1675,13 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         for (int a = 0; a < m; a++) if (repRow[a]) { if (z + Ueff[a][b] <= thr && !domc[a][b]) { cnt++; if (opt_r2p > 0) sc += pow((thr - z - Ueff[a][b]) / (thr - z + 1e-9), opt_r2p); } s += Ueff[a][b]; }
         if (opt_r2p > 0) { if (sc < best_sc || (sc == best_sc && s > best_sum)) { best_sc = sc; best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; } }
         else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; }
+    }
+    if (opt_brtie && allow_row && opt_r2p <= 0) {   /* -brtie: among the lines with the fewest live children, prefer the row of A with the largest row sum */
+        double be = -INFINITY; int ba = -1;
+        for (int a = 0; a < m; a++) { int cnt = 0;
+            for (int b = 0; b < m; b++) if (repCol[b] && z + Ueff[a][b] <= thr && !domc[a][b]) cnt++;
+            if (cnt == best_cnt && g_rowsumA[ev->F[a]] > be) { be = g_rowsumA[ev->F[a]]; ba = a; } }
+        if (ba >= 0) { best_kind = 0; best_line = ba; }
     }
     if (opt_fixorder) { best_kind = 0; best_line = 0; }   /* -fixorder: lowest free row, for bound comparisons */
     if (opt_brecc_hi >= 0 && nd->depth >= opt_brecc_lo && nd->depth <= opt_brecc_hi && allow_row && rule_at(nd->depth)->rule == 2) {
@@ -2361,6 +2368,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-strat")) strat_name = argv[++a][0];
         else if (!strcmp(argv[a], "-nointprune")) opt_intprune = 0;
         else if (!strcmp(argv[a], "-nopar")) opt_par = 0;
+        else if (!strcmp(argv[a], "-brtie")) opt_brtie = 1;
         else if (!strcmp(argv[a], "-brecc")) { opt_brecc_lo = atoi(argv[++a]); opt_brecc_hi = atoi(argv[++a]); }
         else if (!strcmp(argv[a], "-prog")) g_prog = argv[++a];
         else if (!strcmp(argv[a], "-ckpt")) opt_ckpt = argv[++a];
