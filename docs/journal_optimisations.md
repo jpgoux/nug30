@@ -537,3 +537,29 @@ Sur les quatre graines (11, 13, 7, 17) : nœuds divisés par 2,14 ; 2,28 ; 1,80 
 ### nug24 en temps propre (27 octobre, 05 h 00 UTC)
 
 Deux calculs lancés ensemble à 04 h 20 sur la machine libre (stratégie D, ub = 3489, `-nointprune`, binaire b74) : avec `-brtie -brecc 4 6 -brdyn`, 15 425 124 nœuds, 233,5 M itérations, 1 962 s ; avec la règle de 2001, 22 784 046 nœuds, 324,7 M itérations, 2 570 s. Rapport ×1,48 en nœuds, ×1,39 en itérations, **×1,31 en temps**.
+
+### Héritage des duals du père dans l'hybride (27 octobre, 06 h 20 à 06 h 52 UTC)
+
+Option `-hybi D SG SGi` (avec `-hybidep k`, `-hybipass p`) : quand la montée RLT1 d'un nœud ne l'élague pas, son état dual (R, L, Q ≥ 0) passe à ses enfants par la formule exacte de l'enfant d'un état dual (R' = R + L_ab, L'_cd = L_cd + Q_abcd + Q_cdab, Q restreint). Chaque enfant part donc des duals de son père, fait au plus p passes et SGi itérations de sous-gradient, et s'élague si R' dépasse le seuil. Les départs à froid ont lieu dans la bande [seuil − D, seuil] (comme `-hyb`) ou, avec `-hybidep k`, à tous les nœuds de profondeur k. Recherche série seulement.
+
+**nug14** (stratégie C, ub = 1015, référence QPB 1 752 nœuds, 1,2 s) :
+
+| réglage | nœuds | temps | départs à froid (élagués) | enfants hérités (élagués) | itérations SG par enfant hérité |
+|---|---|---|---|---|---|
+| -hyb 40 300 (à froid seul) | 917 | 10,5 s | 562 (419) | | |
+| -hybi 40 300 50 | 925 | 9,7 s | 384 (257) | 179 (159) | 12 |
+| -hybi 40 50 20 | 1 245 | 4,6 s | 384 (84) | 251 (144) | 12 |
+| -hybi 0 100 20 -hybidep 4 | 1 122 | 2,0 s | 164 (120) | 91 (71) | 6 |
+
+Un enfant hérité coûte 0,85 ms et s'élague dans 77 à 89 % des cas avec une douzaine d'itérations, contre 24 ms et 300 à 1 000 itérations à froid : la porte « montée rapide » est franchie pour les enfants. Le temps total reste dominé par les départs à froid.
+
+**nug20** (stratégie C, ub = 2571, référence QPB 992 813 nœuds, ≈ 78 s ; quatre calculs ensemble, limite 1 800 s) :
+
+| réglage | nœuds | temps | détail |
+|---|---|---|---|
+| -hybi 0 300 20 -hybidep 3 | 854 862 | 1 449 s | 1 444 départs à froid (aucun élagué), 169 711 enfants hérités dont 40 681 élagués, gain moyen +46,7 par enfant hérité, 16 itérations SG par enfant |
+| -hybi 0 200 20 -hybidep 4 | > 738 816 | arrêté à 1 800 s | |
+| -hybi 0 100 20 -hybidep 5 | > 701 696 | arrêté à 1 800 s | |
+| -hybi 40 100 20 | > 476 672 | arrêté à 1 800 s | |
+
+L'arbre ne baisse que de 14 % et le temps est multiplié par 18. La montée héritée gagne +47 en moyenne, mais elle part d'un état faible : au sommet de nug20 (m = 17), 300 itérations à froid laissent RLT1 sous QPB (voir plus haut : 2 333 contre 2 385 après 2 000 itérations), et l'héritage ne rattrape pas l'écart à temps. Pour qu'il paie, il faudrait un départ à froid de la qualité du LP au sommet, que nous ne savons pas obtenir en moins d'une seconde par nœud. La voie RLT1 est fermée sur CPU dans cette forme.

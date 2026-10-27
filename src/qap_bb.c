@@ -1914,6 +1914,22 @@ static double rlt_sg(rlt_t *r, int iters, double thr) {
 }
 
 static int opt_hyb = 0, opt_hybm = 6, opt_hybpass = 20; static double opt_hybd = 40, g_hyb_t = 0; static long g_hyb_calls = 0, g_hyb_fath = 0;
+/* -hybi: the RLT1 state of a node that the ascent did not prune is handed down to its children
+ * (exact child of a dual state, see rbb_dfs), so a child starts from its parent's duals instead of cold.
+ * Serial search only. Counters: inherited states, children pruned by the inherited bound alone,
+ * inherited children pruned after work, passes and subgradient iterations spent on inherited states. */
+static int opt_hybi = 0, opt_hybisg = 50, opt_hybipass = 3, opt_hybidep = -1; static double g_hi_tinh = 0; static double opt_hybieps = 0.5;
+static long g_hi_inh = 0, g_hi_free = 0, g_hi_work = 0, g_hi_pass = 0, g_hi_sg = 0, g_hi_cold = 0, g_hi_coldf = 0; static double g_hi_t = 0, g_hi_gain = 0;
+static rlt_t *g_hs[NMAX + 2]; static int g_hs_ok[NMAX + 2], g_hsF[NMAX + 2][NMAX], g_hsL[NMAX + 2][NMAX];
+static void rlt_child(const rlt_t *r, rlt_t *ch, int ab, int b) {
+    int m = r->m, n1 = m - 1, ri[NMAX], ci[NMAX], k = 0;
+    for (int a = 0; a < m; a++) if (a != ab) ri[k++] = a;
+    k = 0; for (int d = 0; d < m; d++) if (d != b) ci[k++] = d;
+    ch->m = n1; ch->R = r->R + r->L[ab][b]; ch->warm = 0;
+    for (int i = 0; i < n1; i++) for (int j = 0; j < n1; j++) { int c = ri[i], d = ci[j];
+        ch->L[i][j] = r->L[c][d] + r->Q[QX(m, ab, b, c, d)] + r->Q[QX(m, c, d, ab, b)];
+        for (int i2 = 0; i2 < n1; i2++) for (int j2 = 0; j2 < n1; j2++) ch->Q[QX(n1, i, j, i2, j2)] = r->Q[QX(m, c, d, ri[i2], ci[j2])]; }
+}
 /* ---------- B&B on the RLT1 dual state alone (experiment -rltbb) ----------
  * The child a->b of a DP state (R, L, Q >= 0) is exact and inherits everything:
  * R' = R + L_ab, L'_cd = L_cd + Q_abcd + Q_cdab, Q' = Q restricted. All entries stay >= 0,
@@ -1965,6 +1981,30 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     st->nodes++; st->nodes_depth[nd->depth]++;
     g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0) write_progress(0);
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
+    if (opt_hybi) {   /* -hybi: inherited or cold RLT1 state; prune if its bound passes the threshold */
+        int dd = nd->depth; double thr = prune_thr(g_ub), th0 = now(); g_hs_ok[dd] = 0;
+        if (!g_hs[dd]) { g_hs[dd] = calloc(1, sizeof(rlt_t)); g_hs[dd]->Q = malloc(sizeof(double) * NMAX * NMAX * NMAX * NMAX); }
+        rlt_t *hr = g_hs[dd]; int have = 0;
+        if (dd > 0 && g_hs_ok[dd - 1] && ev.m >= 2) {   /* child of a node with a state: find the fixed pair */
+            int fi = -1, fj = -1, mp = ev.m + 1;
+            for (int a = 0; a < mp; a++) if (nd->rc[g_hsF[dd - 1][a]] >= 0) { fi = a; break; }
+            for (int b = 0; b < mp; b++) if (nd->cr[g_hsL[dd - 1][b]] >= 0) { fj = b; break; }
+            if (fi >= 0 && fj >= 0) { rlt_child(g_hs[dd - 1], hr, fi, fj); have = 1; g_hi_inh++;
+                if (hr->R > thr) { g_hi_free++; g_hi_t += now() - th0; st->fathom_at_bound++; return; }
+                double r0 = hr->R;
+                for (int k = 0; k < opt_hybipass && hr->R <= thr; k++) { double z0 = hr->R; rlt_pass(hr); g_hi_pass++; if (hr->R - z0 < opt_hybieps) break; }
+                if (hr->R <= thr && opt_hybisg) { long i0 = g_sg_it; rlt_sg(hr, opt_hybisg, thr); g_hi_sg += g_sg_it - i0; }
+                g_hi_gain += hr->R - r0;
+                g_hi_tinh += now() - th0;
+                if (hr->R > thr) { g_hi_work++; g_hi_t += now() - th0; st->fathom_at_bound++; return; } } }
+        if (!have && ev.m >= opt_hybm && (opt_hybidep >= 0 ? dd == opt_hybidep : ev.z > thr - opt_hybd)) {   /* cold start: in the band, as -hyb, or at depth -hybidep */
+            rlt_init(hr, ev.m, w->Ar, w->Br, w->Cr, ev.K); have = 1; g_hi_cold++;
+            for (int k = 0; k < opt_hybpass && hr->R <= thr; k++) rlt_pass(hr);
+            if (hr->R <= thr && opt_sg) rlt_sg(hr, opt_sg, thr);
+            if (hr->R > thr) { g_hi_coldf++; g_hi_t += now() - th0; st->fathom_at_bound++; return; } }
+        if (have && ev.m > 2) { g_hs_ok[dd] = 1; memcpy(g_hsF[dd], ev.F, sizeof(int) * ev.m); memcpy(g_hsL[dd], ev.L, sizeof(int) * ev.m); }
+        g_hi_t += now() - th0;
+    }
     if (opt_hyb && ev.m >= opt_hybm && ev.z > prune_thr(g_ub) - opt_hybd) {   /* -hyb: RLT1 ascent on the nodes QPB leaves near the threshold */
         static __thread rlt_t *hr = NULL; if (!hr) hr = calloc(1, sizeof(rlt_t));
         double th0 = now(); g_hyb_calls++;
@@ -2325,6 +2365,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-domtab2")) opt_domtab = 2;
         else if (!strcmp(argv[a], "-dtm")) { opt_dtmlo = atoi(argv[++a]); opt_dtmhi = atoi(argv[++a]); }
         else if (!strcmp(argv[a], "-hybpass")) opt_hybpass = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-hybi")) { opt_hybi = 1; opt_hybd = atof(argv[++a]); opt_sg = atoi(argv[++a]); opt_hybisg = atoi(argv[++a]); opt_rhalf = 1; }
+        else if (!strcmp(argv[a], "-hybipass")) opt_hybipass = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-hybidep")) opt_hybidep = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-sgth")) opt_sgth = atof(argv[++a]);
         else if (!strcmp(argv[a], "-nfw")) opt_nfw = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-dives")) dives = atoi(argv[++a]);
@@ -2721,6 +2764,7 @@ int main(int argc, char **argv) {
     printf("]}\n");
     if (opt_domtab) fprintf(stderr, "{\"domtab_pruned\":%ld,\"domtab_tr\":%ld,\"domtab_ins\":%ld,\"domtab_lap\":%ld,\"ints\":%ld}\n", g_domtab_pruned, g_domtab_tr, g_domtab_ins, g_domtab_lap, g_dtau);
     if (opt_hyb) fprintf(stderr, "{\"hyb_calls\":%ld,\"hyb_fath\":%ld,\"hyb_t\":%.2f}\n", g_hyb_calls, g_hyb_fath, g_hyb_t);
+    if (opt_hybi) fprintf(stderr, "{\"cold\":%ld,\"cold_fath\":%ld,\"inherited\":%ld,\"inh_fath_free\":%ld,\"inh_fath_work\":%ld,\"passes\":%ld,\"sg_it\":%ld,\"mean_gain\":%.2f,\"rlt_t\":%.2f,\"inh_t\":%.2f}\n", g_hi_cold, g_hi_coldf, g_hi_inh, g_hi_free, g_hi_work, g_hi_pass, g_hi_sg, g_hi_inh ? g_hi_gain / (g_hi_inh - g_hi_free) : 0, g_hi_t, g_hi_tinh);
     if (g_log) fclose(g_log);
     return 0;
 }
