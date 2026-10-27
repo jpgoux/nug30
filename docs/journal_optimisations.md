@@ -457,3 +457,17 @@ Option `-latie lo hi` (avec `-latiek k`, `-lanfw f`) : aux profondeurs de la rè
 | -brtie -brecc 4 5 -brdyn -latie 6 12 -lanfw 4 -latiek 3 | 647 280 | 11,8 M (contre 10,6 M sans -latie) |
 
 L'anticipation retrouve une partie du gain de l'oracle en nœuds (×2,2) mais coûte plus d'itérations qu'elle n'en économise ; avec moins d'itérations par enfant elle ne départage plus rien. Fermé. Les temps CPU (99 à 114 s contre 78 s) vont dans le même sens.
+
+### Estimations nug30 des variantes (27 octobre, 02 h 50 UTC)
+
+Même protocole que plus haut (stratégie D, ub = 6125, `-nointprune -q 1.5 -top 3 -dives 2000`), nœuds estimés sur les 6 120 nœuds de frontière communs :
+
+| réglage | graine 11 | graine 13 |
+|---|---|---|
+| règle de 2001 | 1,274e10 | 2,266e10 |
+| -brecc 4 6 | 6,66e9 (×1,91) | 1,046e10 (×2,17) |
+| -brtie -brecc 4 6 | 6,82e9 (×1,87) | |
+| -brtie -brecc 4 6 -brdyn | **5,95e9 (×2,14)** | **9,93e9 (×2,28)** |
+| -brtie -brecc 4 6 -brdyn -brall | 7,74e9 (×1,65) | |
+
+L'excentricité sur les cases libres gagne encore 5 à 12 % sur nug30 (grille 5 × 6). Remplacer l'anticipation de la profondeur 4 par la case excentrée (`-brall`) fait perdre : l'anticipation reste utile au sommet de l'arbre. Les temps estimés ne se comparent pas ici (calculs lancés à des heures et charges différentes).
