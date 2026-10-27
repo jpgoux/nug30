@@ -630,3 +630,17 @@ Option `-fb` (écrite plus tôt, jamais jugée) : une paire (i, j) dont la borne
 | 13 | 9,931e9 nœuds, 3,58e6 s | 9,856e9 nœuds, 3,66e6 s | −0,8 % | +2 % |
 
 Sans effet. La règle 2 élimine déjà ces enfants au nœud où le coût réduit les condamne ; plus bas, la contrainte relève rarement la borne de Frank-Wolfe, dont le point courant évite déjà ces paires.
+
+## Analyse du problème nug30 : symétries et sous-symétries (27 octobre, 18 h 30 à 19 h UTC)
+
+Question de Jean-Pierre : au-delà du groupe de la grille, existe-t-il des sous-symétries aux étages inférieurs, détectables quand des usines sont fixées, qui feraient fondre l'arbre ? Scripts `src/experiments/anatomie30.py` et `soussym30.py`.
+
+**Données.** Flux entiers de 0 à 10, 284 flux nuls sur 870 paires (33 %), sommes de flux par usine de 40 à 119. Automorphismes exacts : 4 pour la matrice des distances (le groupe de la grille 5 × 6), 1 pour la matrice des flux. Usines les plus proches : 3 et 13 diffèrent sur 15 de leurs 28 flux communs (écart L1 de 45) ; aucune paire d'usines jumelles, même approximatives.
+
+**Sous-symétries exactes aux nœuds.** Une symétrie d'un sous-problème est un couple de permutations (cases libres, usines libres) qui conserve les distances restreintes, les flux restreints et le terme linéaire. Sur 300 tirages de sous-ensembles d'usines libres pour chaque taille m de 12 à 26 : jamais d'automorphisme des flux restreints. Sur les sous-ensembles de cases libres : 0,3 à 3 % ont une réflexion (groupe d'ordre 2), et il faudrait encore qu'elle soit compatible avec les usines et le terme linéaire. Avec le branchement par cases excentrées (coins d'abord), le stabilisateur du groupe de la grille est trivial dès le niveau 1. Les coûts des permutations prennent les deux résidus 0 et 2 modulo 4 : pas de congruence cachée au-delà de la parité déjà exploitée.
+
+**Quasi-symétries.** La dominance par échange (`-dom`, deux usines fixées échangées, l'échange prouvé non aggravant pour toute complétion) est la forme exploitable des symétries approchées : ×1,97 sur nug22, sans effet sur nug30, dont les usines sont trop différentes les unes des autres.
+
+**Agrégation (reformulation à branchement grossier).** Regrouper en un seul nœud les g arrangements des usines fixées sur les cases fixées, borné une fois par QPB avec paires interdites. Aux profondeurs 8 à 10, 3 à 8 % des affectations partielles candidates survivent à la borne ; un nœud grossier n'est élagué que si aucun de ses g membres ne survit, soit (1 − p)^g : 29 % des nœuds grossiers pour g = 24 et p = 0,05, et aucun pour g = 9 !. Au mieux, travail 0,71 + 1/24 ≈ 0,75 du travail fin, soit ×1,3, avec une borne grossière plus faible que celle de ses membres. Pas de fonte de la complexité par cette voie.
+
+**Conclusion.** Les flux de nug30 sont génériques : la seule symétrie est celle de la grille (÷4), déjà utilisée. La difficulté de nug30 tient au nombre de permutations proches de l'optimum, que chaque nœud « dur » des profondeurs 8 à 10 contient ; aucune borne mesurée n'élague ces nœuds, et aucune symétrie ne les regroupe.

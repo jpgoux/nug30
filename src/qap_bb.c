@@ -55,6 +55,18 @@ static long g_fwstat[2][2]; static int g_gapstat = 0; static long g_gaph[2][7];
 /* -fstop km kl: stop Frank-Wolfe once f(X) < target (no fathom possible) after km iterations at a node,
  * kl in a look-ahead child, instead of waiting for nfw2; 0 keeps nfw2 */
 static int opt_fstopm = 0, opt_fstopl = 0;
+/* -prof: cycle counters by phase (rdtsc), bank 0 = nodes of the search, bank 1 = look-ahead children */
+#include <x86intrin.h>
+static double now(void);
+static int g_prof = 0; static unsigned long long g_pc[2][16]; static long g_pn[2][16]; static double g_prof_t0; static unsigned long long g_prof_c0;
+static const char *g_pcname[16] = {"setup K Ar Br Cr", "eig (misses)", "setup LAP+build S,T", "LAP it=0", "LAP it>0", "applyMperm", "fused update", "update_st", "branch() total", "eval fathomed", "eval branching", "inherit_x", "FW other", "", "", ""};
+#define PROF_T(bank, k, c0) do { if (g_prof) { g_pc[bank][k] += __rdtsc() - (c0); g_pn[bank][k]++; } } while (0)
+static void print_prof(void) {
+    double hz = (__rdtsc() - g_prof_c0) / (now() - g_prof_t0);
+    fprintf(stderr, "prof: tsc %.3f GHz\n", hz / 1e9);
+    for (int b = 0; b < 2; b++) for (int k = 0; k < 16; k++) if (g_pn[b][k])
+        fprintf(stderr, "prof %s %-20s %10.3f s %12ld calls %8.2f us/call\n", b ? "look" : "main", g_pcname[k], g_pc[b][k] / hz, g_pn[b][k], g_pc[b][k] / hz / g_pn[b][k] * 1e6);
+}
 static FILE *g_fwlog = NULL; static long g_fwlog_k = 1, g_fwlog_n = 0; static __thread int tl_depth = 0;
 static void print_glb(void) { if (opt_glbpre >= 0) fprintf(stderr, "glb: %ld calls, %ld fathomed\n", g_glbcalls, g_glbfath); }
 static void print_gap(void) { if (!g_gapstat) return; for (int h = 0; h < 2; h++) { fprintf(stderr, "branching nodes with f(X) %s thr, gap thr - z in <1, <2, <5, <10, <20, <50, more:", h ? ">=" : "<"); for (int b = 0; b < 7; b++) fprintf(stderr, " %ld", g_gaph[h][b]); fputc('\n', stderr); } }   /* serial search: [fathomed][count, FW iterations] of the nodes evaluated */
@@ -652,12 +664,14 @@ static const eig_t *get_eig(work_t *w, eig_t *tab, unsigned mask, int m, const d
     if (opt_ecache && e->m == m && e->mask == mask) { w->hits++; g_ehit++; return e; }
     w->miss++;
     double W[NMAX][NMAX]; int k = m - 1;
+    unsigned long long pce = g_prof ? __rdtsc() : 0;
     double t0 = g_timeig ? now() : 0;
     proj_eig(m, M, e->lam, W);
     if (g_timeig) { w->teig += now() - t0; g_teig_tot += now() - t0; g_emiss++; }
     for (int i = 0; i < m; i++) for (int j = 0; j < k; j++) {
         double t = 0; for (int l = 0; l < k; l++) t += Vb[m][i][l] * W[l][j]; e->VW[i][j] = t; }
     e->mask = mask; e->m = m;
+    PROF_T(tl_noext, 1, pce);
     return e;
 }
 static void build_from_vw(int m, const double VW[NMAX][NMAX], const double *s, double out[NMAX][NMAX]) {
@@ -696,6 +710,7 @@ static double setup_qpb(work_t *w, int m) {
     int sol[NMAX];
     const eig_t *ea = get_eig(w, w->ea, w->maskF, m, w->Ar);
     const eig_t *eb = get_eig(w, w->eb, w->maskL, m, w->Br);
+    unsigned long long pcs = g_prof ? __rdtsc() : 0;
     for (int i = 0; i < k; i++) for (int j = 0; j < k; j++) L[i][j] = ea->lam[i] * eb->lam[j];
     double pb = opt_monge ? monge_lap(k, ea->lam, eb->lam, s, t) : NAN;
     if (isnan(pb)) pb = lap(k, L, sol, s, t);   /* <lambda, mu>_-  and its dual s, t */
@@ -704,6 +719,7 @@ static double setup_qpb(work_t *w, int m) {
     w->trST = pb;
     w->eA = ea; w->eB = eb;
     memcpy(w->sd, s, sizeof(double) * k); memcpy(w->td, t, sizeof(double) * k);
+    PROF_T(tl_noext, 2, pcs);
     return pb;
 }
 
@@ -856,6 +872,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
          * opt_extn times; any iteration count gives a valid bound */
         if (opt_ext && !tl_noext && it == nfwc - 1 && nfwc < nfw + opt_ext * opt_extn && f + K >= target && target - best < opt_extd) nfwc += opt_ext;
         if (!opt_fuse) for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
+        unsigned long long pcl = g_prof ? __rdtsc() : 0;
         double lapv, gp = NAN;   /* gp: <G, P> when the LAP is approximate */
         /* -fb: forbidden pairs get cost FBIG in the LAP only. For every permutation P of the
          * subtree, f(P) >= f(X) + <G, P - X> = f(X) - <G, X> + <G', P> >= f(X) - <G, X> + LAP(G'),
@@ -879,6 +896,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             lapv = lap_jv(m, w->G, p, u, v, 1);
         }
         w->nlap++;
+        PROF_T(tl_noext, it == 0 ? 3 : 4, pcl);
         double gx0 = NAN;
         if (ns) {   /* <G, X> needs the true G: restore after keeping the reduced costs */
             int k = 0; double gxs = 0;
@@ -905,7 +923,9 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         if (lg && it < 512) { lgz[it] = target - best; lgf[it] = f + K - target; }
         if (best > target) { it++; lgx = 1; break; }
         double xmp = 0;
+        unsigned long long pca = g_prof ? __rdtsc() : 0;
         applyMperm(w, m, p, w->MP, opt_fuse ? &xmp : NULL);
+        PROF_T(tl_noext, 5, pca);
         /* cost of the permutation p (upper bound) */
         double cp = K; for (int i = 0; i < m; i++) cp += w->APB[i][p[i]] * 0; /* placeholder */
         {
@@ -969,6 +989,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         double alpha = (q > 1e-12) ? -gd / (2 * q) : 1.0;
         if (alpha > 1) alpha = 1; if (alpha <= 0) { it++; break; }
+        unsigned long long pcf = g_prof ? __rdtsc() : 0;
         if (opt_fuse) {   /* X, MX and the next gradient G in one pass */
             double b = 1 - alpha, cpx = 0;
             for (int i = 0; i < m; i++) { double *x = w->X[i], *mx = w->MX[i], *g = w->G[i]; const double *mp = w->MP[i], *cr = w->Cr[i];
@@ -982,11 +1003,15 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
             w->MX[i][j] += alpha * (w->MP[i][j] - w->MX[i][j]);
         }
         f += alpha * gd + alpha * alpha * q;
-        if (opt_upd && (it + 1) % opt_upd == 0 && it + 1 < nfw && update_st(w, m)) {
+        PROF_T(tl_noext, 6, pcf);
+        if (opt_upd && (it + 1) % opt_upd == 0 && it + 1 < nfw) { unsigned long long pcu = g_prof ? __rdtsc() : 0; int ch = update_st(w, m);
+          if (ch) {
             applyM(w, m, w->X, w->MX);
             s2 = dotm(m, w->Cr, w->X);
             f = dotm(m, w->X, w->MX) + s2 + w->trST;
             for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->G[i][j] = 2 * w->MX[i][j] + w->Cr[i][j];
+          }
+          PROF_T(tl_noext, 7, pcu);
         }
         /* termination rule of Brixius-Anstreicher: stop at NFW2 if the QP
          * value f(X_k) is already below the incumbent (cannot fathom) */
@@ -1469,6 +1494,7 @@ static void domtab_store(work_t *w, int m, double K, double z) {
 }
 
 static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
+    unsigned long long pc0 = g_prof ? __rdtsc() : 0;
     int m = 0, mc = 0;
     w->maskF = w->maskL = 0;
     for (int i = 0; i < N; i++) if (nd->rc[i] < 0) { ev->F[m++] = i; w->maskF |= 1u << i; }
@@ -1503,6 +1529,7 @@ static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw
             w->Cr[a][b] = 2 * s + C0[ev->F[a]][ev->L[b]];
         }
     }
+    PROF_T(tl_noext, 0, pc0);
     if (opt_domtab && m >= opt_dtmlo && m <= opt_dtmhi && !tl_noext && domtab_check(w, m, K, prune_thr(g_ub))) {
         ev->z = INFINITY; w->x0_ok = 0;
         for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) w->U[a][b] = 0;
@@ -1988,7 +2015,9 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     eval_t ev;
     if (opt_ckpt && now() - g_ckpt_last > opt_ckpt_s) write_ckpt(nd);
     double t = now(); long fw0 = w->nfw;
+    unsigned long long pcn = g_prof ? __rdtsc() : 0;
     { const rule_t *R = rule_at(nd->depth); eval_node(nd, w, &ev, R->nfw1, R->nfw2, who); }
+    PROF_T(0, (ev.m <= 1 || ev.z > prune_thr(g_ub)) ? 9 : 10, pcn);
     st->t_bound += now() - t;
     if (opt_domtab && ev.m >= opt_dtmlo && ev.m <= opt_dtmhi && isfinite(ev.z)) domtab_store(w, ev.m, ev.K, ev.z);
     if (ev.m > 1) { int f = ev.z > prune_thr(g_ub); g_fwstat[f][0]++; g_fwstat[f][1] += w->nfw - fw0;
@@ -2036,7 +2065,9 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     unsigned fbsave[NMAX];
     if (opt_fb) { memcpy(fbsave, nd->fb, sizeof fbsave); add_fb(nd, &ev, w); }
     child_t ch[NMAX];
+    unsigned long long pcb = g_prof ? __rdtsc() : 0;
     int nch = branch(nd, w, &ev, ch, who);
+    PROF_T(0, 8, pcb);
     int d0 = nd->depth;
     double (*Xp)[NMAX] = NULL; int posF[NMAX], posL[NMAX];
     if (opt_warm & 2) {   /* children start from the parent's final point, restricted (inherit_x) */
@@ -2045,7 +2076,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     }
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
-        if (Xp) inherit_x(w, (const double (*)[NMAX])Xp, ev.m, posF[ch[c].i], posL[ch[c].j]);
+        if (Xp) { unsigned long long pci = g_prof ? __rdtsc() : 0; inherit_x(w, (const double (*)[NMAX])Xp, ev.m, posF[ch[c].i], posL[ch[c].j]); PROF_T(0, 11, pci); }
         g_chs[d0] = ch; g_nch[d0] = nch; g_cidx[d0] = c;
         g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
@@ -2439,6 +2470,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-ext")) { opt_ext = atoi(argv[++a]); opt_extd = atof(argv[++a]); }
         else if (!strcmp(argv[a], "-extn")) opt_extn = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-fstop")) { opt_fstopm = atoi(argv[++a]); opt_fstopl = atoi(argv[++a]); }
+        else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
         else if (!strcmp(argv[a], "-gapstat")) { g_gapstat = 1; atexit(print_gap); }
         else if (!strcmp(argv[a], "-timeig")) { g_timeig = 1; atexit(print_teig); }
