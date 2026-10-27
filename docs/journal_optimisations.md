@@ -427,3 +427,19 @@ Stratégie D, ub = 3489, `-nointprune -brtie -brecc 4 6`, un cœur, reprise sur 
 Rapport ×1,34 en nœuds et ×1,29 en itérations. Le temps n'est pas comparable : le calcul a partagé quatre cœurs avec cinq estimations nug30 (charge 5,7). Sous la stratégie D la règle n'agit qu'aux profondeurs 5 et 6 (la profondeur 4 relève de l'anticipation) ; les effectifs par profondeur sont identiques jusqu'à la profondeur 5 (244 501) et divergent ensuite.
 
 Option `-brall` : la case excentrée remplace aussi l'anticipation aux profondeurs de `-brecc` où celle-ci s'applique. Estimation nug30 (graine 11, `-brtie -brecc 4 6 -brdyn -brall`) lancée à 02 h 25.
+
+### Où se loge le gain de l'oracle (27 octobre, 02 h 40 UTC)
+
+Sur les nœuds échantillonnés par l'oracle, on recompte la règle 2 (ligne au plus petit nombre d'enfants vivants, z + U ≤ seuil). La meilleure ligne fait partie des ex aequo de la règle 2 dans la moitié des cas à la profondeur 3 de nug20 (59 sur 124) et dans la plupart des cas à la profondeur 4 (405 sur 794 au premier rang, la suite aux rangs 1 à 5). Choisir la meilleure ligne parmi ces seuls ex aequo donne presque tout le gain de l'oracle :
+
+| fichier | oracle complet | oracle parmi les ex aequo | ex aequo départagés par la case excentrée | par la somme de U | par le flux de l'usine |
+|---|---|---|---|---|---|
+| nug20, prof. 3 | ×1,72 | ×1,60 | ×1,11 | ×0,76 | ×0,85 à ×0,94 |
+| nug20, prof. 4 | ×2,04 | ×1,69 | ×1,33 | ×1,00 | ×1,06 |
+| nug20, prof. 7 | ×1,17 | ×1,06 | ×1,01 | ×0,99 | ×0,98 à ×1,00 |
+| nug22, prof. 3 | ×1,28 | ×1,19 | ×1,02 | ×0,83 | ×0,65 à ×0,81 |
+| nug22, prof. 4 | ×1,45 | ×1,34 | ×1,06 | ×1,00 | ×0,87 à ×0,89 |
+
+(rapport = taille de sous-arbre de la règle par défaut divisée par celle de la règle testée ; script `src/experiments/oracle_ties.py`). Le gain se joue donc dans le départage des ex aequo de la règle 2. Les critères tirés de la matrice des flux (usine au plus fort ou au plus faible flux total) et des bornes U font moins bien que la règle actuelle.
+
+L'usine 5 (numérotation à partir de 0), meilleure ligne dans 85 des 98 nœuds de profondeur 3 où elle est libre, n'est distinguée ni par son flux total (46, rang 13 sur 20) ni par la somme de sa colonne de U. Elle occupe le coin 19 de la grille dans la solution optimale de QAPLIB (`nug20.sln`, position 20 : usine 6 en numérotation à partir de 1). Hypothèse non vérifiée : brancher sur l'usine destinée à un coin a le même effet que brancher sur une case de coin, mais aucun critère statique testé ne la repère avant de connaître la solution.
