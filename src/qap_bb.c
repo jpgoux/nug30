@@ -87,7 +87,9 @@ static const rule_t *rule_at(int depth) {
     for (int k = 0; k < nstrat; k++) if (depth <= strat[k].maxdepth) return &strat[k];
     return &strat[nstrat - 1];
 }
-static inline double prune_thr(double ub) { return opt_intprune ? ub - 1 + 1e-6 : ub - 1e-6; }
+static int opt_par = 1; static long g_gran = 1;   /* every permutation cost is a multiple of g_gran (-nopar: assume 1) */
+/* largest achievable cost strictly below ub is g*ceil(ub/g) - g; fathom if bound > it */
+static inline double prune_thr(double ub) { return !opt_intprune ? ub - 1e-6 : g_gran > 1 && isfinite(ub) ? g_gran * ceil(ub / g_gran - 1e-9) - g_gran + 1e-6 : ub - 1 + 1e-6; }
 
 static double now(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -116,6 +118,8 @@ static void read_qaplib(const char *fn) {
     for (int i = 0; i < N; i++) for (int j = 0; j < N; j++)
         if (A[i][j] != A[j][i] || B[i][j] != B[j][i]) { fprintf(stderr, "matrices must be symmetric\n"); exit(1); }
 }
+
+static long lgcd(long a, long b) { while (b) { long t = a % b; a = b; b = t; } return a; }
 
 static double qap_cost(const int *p) {
     double c = 0;
@@ -1836,13 +1840,15 @@ static void rlt_bake(rlt_t *r, const double *lam) {
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) r->L[a][b] = c[a][b];
     r->R += val;
 }
-static int opt_sg = 0; static double opt_sgth = 1.4; static long g_sg_it = 0;
-/* subgradient on the twin splits from the current state, Polyak step towards thr + 1; bakes the best point */
+static int opt_sg = 0; static double opt_sgth = 1.4, opt_defl = 0; static long g_sg_it = 0;
+/* subgradient on the twin splits from the current state, Polyak step towards thr + 1; bakes the best point.
+ * opt_defl > 0: deflected direction d = g + beta d_prev (Camerini-Fratta-Maffioli, beta from the obtuse rule) */
 static double rlt_sg(rlt_t *r, int iters, double thr) {
     int m = r->m; size_t M4 = (size_t)m * m * m * m;
     double *lam = calloc(M4, sizeof(double)), *bl = calloc(M4, sizeof(double));
+    double *g = opt_defl > 0 ? calloc(M4, sizeof(double)) : NULL, *dp = opt_defl > 0 ? calloc(M4, sizeof(double)) : NULL;
     static __thread int ys[NMAX * NMAX][NMAX]; int xm[NMAX];
-    double best = r->R; int have = 0;
+    double best = r->R; int have = 0, hasd = 0;
     for (int it = 0; it < iters; it++) {
         double z = rlt_lag(r, lam, xm, ys); g_sg_it++;
         if (z > best + 1e-9) { best = z; memcpy(bl, lam, sizeof(double) * M4); have = 1; }
@@ -1851,12 +1857,25 @@ static double rlt_sg(rlt_t *r, int iters, double thr) {
         for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
             if (!(xm[cc] == d && ys[cc * m + d][a] == b)) cnt++; } }
         if (!cnt) break;
-        double step = opt_sgth * (thr + 1 - z) / (2.0 * cnt);
+        if (!g) {
+            double step = opt_sgth * (thr + 1 - z) / (2.0 * cnt);
+            for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
+                if (!(xm[cc] == d && ys[cc * m + d][a] == b)) lam[QX(m, a, b, cc, d)] += step; } }
+            continue;
+        }
+        memset(g, 0, sizeof(double) * M4);
         for (int a = 0; a < m; a++) { int b = xm[a]; for (int cc = 0; cc < m; cc++) if (cc != a) { int d = ys[a * m + b][cc];
-            if (!(xm[cc] == d && ys[cc * m + d][a] == b)) lam[QX(m, a, b, cc, d)] += step; } }
+            if (!(xm[cc] == d && ys[cc * m + d][a] == b)) { g[QX(m, a, b, cc, d)] += 1; g[QX(m, cc, d, a, b)] -= 1; } } }
+        double beta = 0;
+        if (hasd) { double gd = 0, dd = 0; for (size_t k = 0; k < M4; k++) { gd += g[k] * dp[k]; dd += dp[k] * dp[k]; }
+            if (gd < 0 && dd > 0) beta = -opt_defl * gd / dd; }
+        double nn = 0; for (size_t k = 0; k < M4; k++) { dp[k] = g[k] + beta * dp[k]; nn += dp[k] * dp[k]; }
+        hasd = 1;
+        double step = opt_sgth * (thr + 1 - z) / nn;
+        for (size_t k = 0; k < M4; k++) lam[k] += 0.5 * step * dp[k];
     }
     if (have) rlt_bake(r, bl);
-    free(lam); free(bl);
+    free(lam); free(bl); free(g); free(dp);
     return r->R;
 }
 
@@ -2267,6 +2286,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-enum")) opt_enum = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-hyb")) { opt_hyb = 1; opt_hybd = atof(argv[++a]); opt_sg = atoi(argv[++a]); opt_rhalf = 1; }
         else if (!strcmp(argv[a], "-hybm")) opt_hybm = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-defl")) opt_defl = atof(argv[++a]);
         else if (!strcmp(argv[a], "-domtab")) opt_domtab = 1;
         else if (!strcmp(argv[a], "-domtab2")) opt_domtab = 2;
         else if (!strcmp(argv[a], "-dtm")) { opt_dtmlo = atoi(argv[++a]); opt_dtmhi = atoi(argv[++a]); }
@@ -2335,6 +2355,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-lap")) opt_lap = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-strat")) strat_name = argv[++a][0];
         else if (!strcmp(argv[a], "-nointprune")) opt_intprune = 0;
+        else if (!strcmp(argv[a], "-nopar")) opt_par = 0;
         else if (!strcmp(argv[a], "-prog")) g_prog = argv[++a];
         else if (!strcmp(argv[a], "-ckpt")) opt_ckpt = argv[++a];
         else if (!strcmp(argv[a], "-ckpt_s")) opt_ckpt_s = atof(argv[++a]);
@@ -2345,6 +2366,14 @@ int main(int argc, char **argv) {
     set_strategy(strat_name);
     g_t0 = now();
     compute_aut(A, &GA); compute_aut(B, &GB);
+    if (opt_par) {   /* A, B symmetric with zero diagonal: cost = 2 sum_{i<k} A_ik B_p(i)p(k), a multiple of 2 gcd(A) gcd(B) */
+        long ga = 0, gb = 0; int ok = 1;
+        for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) {
+            if (A[i][j] != floor(A[i][j]) || B[i][j] != floor(B[i][j]) || (i == j && (A[i][i] != 0 || B[i][i] != 0))) ok = 0;
+            ga = lgcd(ga, labs((long)A[i][j])); gb = lgcd(gb, labs((long)B[i][j])); }
+        g_gran = ok && ga && gb ? 2 * ga * gb : 1;
+        if (opt_verbose) fprintf(stderr, "cost granularity %ld\n", g_gran);
+    }
     if (opt_verbose) fprintf(stderr, "n=%d |Aut(A)|=%d |Aut(B)|=%d\n", N, GA.n, GB.n);
     int p[NMAX];
     double th0 = now();
@@ -2419,6 +2448,16 @@ int main(int argc, char **argv) {
             if (getenv("THETA")) opt_sgth = atof(getenv("THETA"));
             double t1 = now(); printf(",\"cyc\":[");
             for (int c = 1; c <= nc; c++) { rlt_sg(&rr, k, thr); rlt_pass(&rr); printf("%s[%d,%.2f,%.4f]", c > 1 ? "," : "", c, rr.R, now() - t1); if (rr.R > thr) break; }
+            printf("]");
+        }
+        if (getenv("SGF")) {   /* rlt_sg from the same state at several budgets (DEFL = deflection gamma) */
+            double thr = getenv("THR") ? atof(getenv("THR")) : g_ub; if (getenv("THETA")) opt_sgth = atof(getenv("THETA"));
+            if (getenv("DEFL")) opt_defl = atof(getenv("DEFL"));
+            size_t M4 = (size_t)ev.m * ev.m * ev.m * ev.m; static rlt_t cp; double *Qs = malloc(sizeof(double) * M4);
+            printf(",\"sgf\":[");
+            int bud[] = {30, 100, 300, 1000, 3000}; for (int k = 0; k < 5; k++) {
+                cp = rr; cp.Q = Qs; memcpy(Qs, rr.Q, sizeof(double) * M4); long i0 = g_sg_it; double t1 = now();
+                rlt_sg(&cp, bud[k], thr); printf("%s[%d,%.2f,%ld,%.4f]", k ? "," : "", bud[k], cp.R, g_sg_it - i0, now() - t1); }
             printf("]");
         }
         int SG = getenv("SG") ? atoi(getenv("SG")) : 0;

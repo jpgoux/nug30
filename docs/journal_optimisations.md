@@ -316,3 +316,11 @@ Le DP seul plafonne sous QPB à ce nœud ; le sous-gradient atteint 1 014 (élag
 **Courbe δ sur nug30 (estimateur `-top 3`, graine 7, profils partiels).** Seuil 6 125 : 2,5e10 nœuds estimés ; seuil 6 061 (borne +63 partout) : 2,2e9. Gain d'au moins ×11 (×6,3 sur les profondeurs ≤ 10, l'arbre à 6 125 descend plus bas). Une seule graine.
 
 **Bilan de la nuit.** La famille RLT1 a l'écart voulu (+42 à +69 aux nœuds mesurés au LP exact), mais nous ne savons pas le capturer assez vite sur CPU : la montée de Hahn et Grant plafonne sous QPB, le sous-gradient a besoin de 1 000 itérations. Ce qui reste à essayer sur cette voie : une montée plus rapide (faisceaux, lissage, ou méthode de coordonnées sur λ par paire), et l'héritage de λ du père vers les enfants dans l'hybride, qui supprimerait le départ à froid.
+
+### Élagage à la parité du coût (27 octobre, 00 h 20 UTC)
+
+Idée de la nuit, simple et valide. Quand A et B sont symétriques, entiers et de diagonale nulle (toutes les instances nug), le coût d'une permutation vaut 2 Σ_{i<k} A_ik B_p(i)p(k) : il est pair, et plus généralement multiple de g = 2 pgcd(A) pgcd(B). Une solution meilleure que ub coûte donc au plus g⌈ub/g⌉ − g, et un nœud est élagué dès que sa borne dépasse cette valeur (ub − 2 quand ub est pair), au lieu de ub − 1 avec l'élagage entier. Détection automatique au chargement (`g_gran`), option `-nopar` pour revenir à l'ancien seuil. Les bancs en `-nointprune` ne changent pas.
+
+nug20, stratégie C, ub = 2 570 (preuve d'optimalité) : 992 813 nœuds avec le seuil du banc, 944 243 avec l'élagage entier, **898 920 avec la parité** (−4,8 % de plus, −9,5 % au total). Contrôle : nug12 à nug18 lancés avec ub = opt + 2 et sans heuristique retrouvent tous l'optimum.
+
+Prolongement essayé et abandonné le même soir : sur une grille, la distance de Manhattan est impaire exactement entre cases de couleurs opposées, si bien que coût/2 mod 2 = nombre (mod 2) d'usines « impaires » (degré impair dans le graphe des flots impairs) posées sur les cases noires. Le coût est alors connu modulo 4 dès que ce nombre est fixé, ce qui gagnerait encore 2 sur la moitié des nœuds. Mesure sur nug14 : la classe n'est déterminée à aucun des 17 808 nœuds évalués, car il faut avoir placé toutes ces usines ou rempli toutes les cases d'une couleur. Code retiré.
