@@ -385,3 +385,13 @@ Deux essais sur l'anticipation (niveaux 2 et 3 de la stratégie C, nug20 avec `-
 
 - Score « somme des exp(κ × écart au seuil) des enfants vivants » à minimiser (option `-lak κ`, qui désactive l'abandon anticipé des candidates) : κ = 0,05 donne 545 813 nœuds mais 12,5 M d'itérations ; κ = 0,15, 597 844 et 13,1 M. Rejeté : l'abandon anticipé vaut plus que le meilleur score.
 - Toutes les lignes comme candidates au niveau 3 (`-nb3 20` au lieu de 10) : nug20 499 598 nœuds pour 9,81 M d'itérations (×1,80 en nœuds sur la référence du jour), mais nug22 (`-nb3 22`) 1 246 333 nœuds contre 1 246 955, avec 16,7 M d'itérations contre 15,8 M. Le gain est propre à nug20, où l'oracle de profondeur 3 désigne presque toujours l'usine 5. Non retenu. Avec la règle 3 jusqu'à la profondeur 4 (`-c3 4`), nug20 tombe à 402 612 nœuds mais le travail double (20,2 M).
+
+Estimations nug30 complètes (27 octobre, 01 h 50 UTC), règle excentrée aux profondeurs 5-6 (`-brecc 4 6` en stratégie D) contre la règle actuelle, même graine :
+
+| graine | règle actuelle | -brecc 4 6 | rapport (nœuds) | -brtie -brecc 4 6 |
+|---|---|---|---|---|
+| 11 | 1,27e10 | 6,66e9 | ×1,91 | 6,82e9 (×1,87) |
+| 7 | 2,53e10 | 1,78e10 | ×1,42 | 1,41e10 (×1,79) |
+| 13 | 2,27e10 | 1,05e10 | ×2,17 | |
+
+Moyenne géométrique ×1,8 en nœuds. Les temps estimés dépendent de la charge de la machine pendant les plongées : ils ne se comparent qu'entre calculs lancés ensemble (graine 11 : ÷1,91 ; graine 13 : ÷2,02). Les profondeurs 5-8 et 5-12 font moins bien en temps (graine 11 : 1,96e6 et 2,02e6 s contre 1,67e6 s).
