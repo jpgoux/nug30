@@ -414,3 +414,16 @@ Protocole du compteur (stratégie C, un cœur, ub = opt + 1, `-nointprune`), qua
 | nug20 | -brtie -brecc 4 10 -brdyn | 747 867 | 10,3 M (×1,52) | 61,1 s (×1,28) |
 
 Sur nug20 l'excentricité dynamique ne change rien (la grille 4 × 5 est presque carrée) ; sur nug22 (grille 2 × 11) elle compte. Les deux temps de nug20 à réglage presque identique (58,9 et 67,9 s pour 10,6 M d'itérations) donnent l'ordre du bruit. Estimations nug30 en cours.
+
+### nug24 résolu avec la règle excentrée (27 octobre, 02 h 10 UTC)
+
+Stratégie D, ub = 3489, `-nointprune -brtie -brecc 4 6`, un cœur, reprise sur point de contrôle après le redémarrage de 00 h 53. Référence : même protocole sans la règle (soirée du 26).
+
+| réglage | nœuds | itérations FW | temps (machine chargée) |
+|---|---|---|---|
+| règle de 2001 | 22 784 046 | 324,7 M | 2 163 s |
+| -brtie -brecc 4 6 | 17 060 093 | 251,3 M | 2 595 s |
+
+Rapport ×1,34 en nœuds et ×1,29 en itérations. Le temps n'est pas comparable : le calcul a partagé quatre cœurs avec cinq estimations nug30 (charge 5,7). Sous la stratégie D la règle n'agit qu'aux profondeurs 5 et 6 (la profondeur 4 relève de l'anticipation) ; les effectifs par profondeur sont identiques jusqu'à la profondeur 5 (244 501) et divergent ensuite.
+
+Option `-brall` : la case excentrée remplace aussi l'anticipation aux profondeurs de `-brecc` où celle-ci s'applique. Estimation nug30 (graine 11, `-brtie -brecc 4 6 -brdyn -brall`) lancée à 02 h 25.

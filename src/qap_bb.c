@@ -1597,7 +1597,7 @@ static int cmp_child(const void *a, const void *b) {
  * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
  * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
  * use U only through such single-pair bounds and sums of them). */
-static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0, opt_brdyn = 0, opt_laecc = 0; static double opt_lak = 0; static double g_rowsumA[NMAX];
+static int opt_brecc_lo = 0, opt_brecc_hi = -1, opt_brtie = 0, opt_brdyn = 0, opt_laecc = 0, opt_brall = 0; static double opt_lak = 0; static double g_rowsumA[NMAX];
 static int opt_sens = 0;
 static void sharpen_U(work_t *w, int m) {
     if (!w->up_ok) return;
@@ -1686,9 +1686,11 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         if (ba >= 0) { best_kind = 0; best_line = ba; }
     }
     if (opt_fixorder) { best_kind = 0; best_line = 0; }   /* -fixorder: lowest free row, for bound comparisons */
-    if (opt_brecc_hi >= 0 && nd->depth >= opt_brecc_lo && nd->depth <= opt_brecc_hi && allow_row && rule_at(nd->depth)->rule == 2) {
+    int brforced = 0;   /* -brall: the eccentric row replaces the look-ahead too */
+    if (opt_brecc_hi >= 0 && nd->depth >= opt_brecc_lo && nd->depth <= opt_brecc_hi && allow_row && (rule_at(nd->depth)->rule == 2 || opt_brall)) {
         /* -brecc lo hi: branch on the free row whose A row sum is largest (on a grid: the most eccentric cell) */
         double bs = -INFINITY; for (int a = 0; a < m; a++) { double e = ecc[a]; if (e > bs) { bs = e; best_kind = 0; best_line = a; } }
+        brforced = opt_brall;
     }
     /* Rules 3 and 4 (Brixius-Anstreicher 2001): prospective bounds on the
      * NBEST rows and NBEST columns with the largest sums of U (Rule 1 order). */
@@ -1698,7 +1700,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_lanb; Rsz.nfw3 = opt_lanfw; R = &Rsz;
     }
     double zpro[NMAX]; int have_pro = 0;
-    if ((R->rule == 3 || R->rule == 4) && m > 2 && !opt_fixorder) {
+    if ((R->rule == 3 || R->rule == 4) && m > 2 && !opt_fixorder && !brforced) {
         typedef struct { int kind, line; double s; } cand_t;
         cand_t rows[NMAX], cols[NMAX], cands[2 * NMAX]; int nr = 0, ncl = 0, nc = 0;
         if (allow_row) for (int a = 0; a < m; a++) { double s = 0; for (int b = 0; b < m; b++) if (repCol[b]) s += Ueff[a][b]; rows[nr++] = (cand_t){0, a, s}; }
@@ -2378,6 +2380,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-nopar")) opt_par = 0;
         else if (!strcmp(argv[a], "-brtie")) opt_brtie = 1;
         else if (!strcmp(argv[a], "-brdyn")) opt_brdyn = 1;
+        else if (!strcmp(argv[a], "-brall")) opt_brall = 1;
         else if (!strcmp(argv[a], "-laecc")) opt_laecc = 1;
         else if (!strcmp(argv[a], "-lak")) opt_lak = atof(argv[++a]);
         else if (!strcmp(argv[a], "-brecc")) { opt_brecc_lo = atoi(argv[++a]); opt_brecc_hi = atoi(argv[++a]); }
