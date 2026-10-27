@@ -576,6 +576,7 @@ typedef struct {
     double Wmax[NMAX][NMAX];            /* -umax: max over the FW iterations of z_k + U_k */
     double teig;                        /* -timeig: seconds in the spectral decompositions */
     double flast;                       /* f(X) + K at the end of the last Frank-Wolfe run */
+    int inh_ok, inh_live; double Si[NMAX][NMAX], Ti[NMAX][NMAX], trSTi;   /* -inh: S, T inherited from the parent (principal submatrices) */
 } work_t;
 
 /* Pairwise Frank-Wolfe (Lacoste-Julien and Jaggi): X is kept as a convex
@@ -594,6 +595,21 @@ static int opt_pfw = 0;
 static int opt_lasize = 0, opt_lanb = 5, opt_lanfw = 18;   /* rule 3 below the strategy's levels while m >= opt_lasize */
 static int opt_lacap = 1;   /* look-ahead: child bounds capped at the threshold, hopeless candidates abandoned */
 static int opt_warm = 2;   /* 1: look-ahead children, 2: children in the serial search, start from the parent's point; 4: S, T fitted there */
+/* -inh k: a child (a -> b) starts Frank-Wolfe with S' = S[-a,-a], T' = T[-b,-b] taken from the parent, no spectral
+ * decomposition and no LAP of the eigenvalues: the parent's function restricted to the child's face is the child's
+ * function with these S', T', convex on the child's affine hull, exact on its permutations. A child that reaches the
+ * S, T update (iteration opt_upd) switches to its own S, T. Bit 1: children of the search, bit 2: look-ahead children. */
+static int opt_inh = 0; static long g_inh_used = 0, g_inh_switch = 0;
+static void print_inh(void) { if (opt_inh) fprintf(stderr, "inh: %ld nodes started on inherited S, T; %ld switched to their own\n", g_inh_used, g_inh_switch); }
+static void inherit_st(work_t *dst, const double S[NMAX][NMAX], const double T[NMAX][NMAX], double trST, int m, int a, int b) {
+    int r = 0;
+    for (int p = 0; p < m; p++) { if (p == a) continue; int c = 0;
+        for (int q = 0; q < m; q++) { if (q == a) continue; dst->Si[r][c++] = S[p][q]; } r++; }
+    r = 0;
+    for (int p = 0; p < m; p++) { if (p == b) continue; int c = 0;
+        for (int q = 0; q < m; q++) { if (q == b) continue; dst->Ti[r][c++] = T[p][q]; } r++; }
+    dst->trSTi = trST - S[a][a] - T[b][b]; dst->inh_ok = 1;
+}
 static void inherit_x(work_t *dst, const double X[NMAX][NMAX], int m, int a, int b) {
     double sden = 1 - X[a][b];
     dst->x0_ok = 0;
@@ -834,12 +850,15 @@ static inline double dotm(int m, const double a[NMAX][NMAX], const double b[NMAX
  * If a permutation found has cost < *ub_found, it is reported in bestp. */
 static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw2,
                      double *ub_found, int *bestp) {
-    setup_qpb(w, m);
+    if (w->inh_ok) {
+        memcpy(w->Sp, w->Si, sizeof(double) * NMAX * NMAX); memcpy(w->Tp, w->Ti, sizeof(double) * NMAX * NMAX);
+        w->trST = w->trSTi; w->eA = w->eB = NULL; w->inh_ok = 0; w->inh_live = 1; g_inh_used++;
+    } else { setup_qpb(w, m); w->inh_live = 0; }
     w->apb_ok = 0;
     double inv = 1.0 / m;
     if (w->x0_ok) {   /* inherited starting point */
         for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) w->X[i][j] = w->X0[i][j];
-        if (opt_warm & 4) update_st(w, m);   /* S, T fitted to the inherited point before the first step */
+        if ((opt_warm & 4) && !w->inh_live) update_st(w, m);   /* S, T fitted to the inherited point before the first step */
         applyM(w, m, w->X, w->MX);
         w->x0_ok = 0;
     } else {
@@ -1004,7 +1023,8 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
         }
         f += alpha * gd + alpha * alpha * q;
         PROF_T(tl_noext, 6, pcf);
-        if (opt_upd && (it + 1) % opt_upd == 0 && it + 1 < nfw) { unsigned long long pcu = g_prof ? __rdtsc() : 0; int ch = update_st(w, m);
+        if (opt_upd && (it + 1) % opt_upd == 0 && it + 1 < nfw) { unsigned long long pcu = g_prof ? __rdtsc() : 0; int ch;
+          if (w->inh_live) { setup_qpb(w, m); w->inh_live = 0; update_st(w, m); ch = 1; g_inh_switch++; } else ch = update_st(w, m);
           if (ch) {
             applyM(w, m, w->X, w->MX);
             s2 = dotm(m, w->Cr, w->X);
@@ -1017,7 +1037,7 @@ static double qpb_fw(work_t *w, int m, double K, double target, int nfw, int nfw
          * value f(X_k) is already below the incumbent (cannot fathom) */
         if (it + 1 >= nfwstop && f + K < target) {
             /* before giving up, one S, T update may lift f above the target */
-            if (opt_updstop && update_st(w, m)) {
+            if (opt_updstop && !w->inh_live && update_st(w, m)) {
                 applyM(w, m, w->X, w->MX);
                 s2 = dotm(m, w->Cr, w->X);
                 f = dotm(m, w->X, w->MX) + s2 + w->trST;
@@ -1495,6 +1515,7 @@ static void domtab_store(work_t *w, int m, double K, double z) {
 
 static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw2, int who) {
     unsigned long long pc0 = g_prof ? __rdtsc() : 0;
+    int inh = w->inh_ok; w->inh_ok = 0;
     int m = 0, mc = 0;
     w->maskF = w->maskL = 0;
     for (int i = 0; i < N; i++) if (nd->rc[i] < 0) { ev->F[m++] = i; w->maskF |= 1u << i; }
@@ -1565,7 +1586,7 @@ static void eval_node1(const node_t *nd, work_t *w, eval_t *ev, int nfw, int nfw
         if (g > target) { ev->z = g; w->x0_ok = 0; g_glbfath++; for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) w->U[a][b] = 0; return; }
     }
     double ubf = INFINITY; int bp[NMAX];
-    w->up_ok = 0;
+    w->up_ok = 0; w->inh_ok = inh;
     ev->z = qpb_fw(w, m, K, target, nfw, nfw2, &ubf, bp);
     if (opt_umax && ev->z > -INFINITY) for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double t = w->Wmax[a][b] - ev->z; if (t > w->U[a][b]) w->U[a][b] = t; }
     if (w->nfb) {   /* forbidden pairs: reduced cost FBIG, shown to the branching rules as just eliminated */
@@ -1811,6 +1832,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 else {
                     node_t chn = *nd; chn.rc[ev->F[a]] = ev->L[b]; chn.cr[ev->L[b]] = ev->F[a]; chn.depth++;
                     if (opt_warm & 1) inherit_x(w2, w->X, m, a, b);
+                    if (opt_inh & 2) inherit_st(w2, w->Sp, w->Tp, w->trST, m, a, b);
                     eval_t e2; tl_noext = 1; eval_node(&chn, w2, &e2, R->nfw3, R->nfw3, who); tl_noext = 0;
                     w2->x0_ok = 0;
                     zij = fmax(e2.z, z + Ueff[a][b]);
@@ -2069,21 +2091,26 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     int nch = branch(nd, w, &ev, ch, who);
     PROF_T(0, 8, pcb);
     int d0 = nd->depth;
-    double (*Xp)[NMAX] = NULL; int posF[NMAX], posL[NMAX];
+    double (*Xp)[NMAX] = NULL, (*Sp)[NMAX] = NULL, (*Tp)[NMAX] = NULL; double trp = w->trST; int posF[NMAX], posL[NMAX];
+    if ((opt_warm & 2) || (opt_inh & 1)) for (int a = 0; a < ev.m; a++) { posF[ev.F[a]] = a; posL[ev.L[a]] = a; }
     if (opt_warm & 2) {   /* children start from the parent's final point, restricted (inherit_x) */
         Xp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Xp, w->X, sizeof(double) * NMAX * NMAX);
-        for (int a = 0; a < ev.m; a++) { posF[ev.F[a]] = a; posL[ev.L[a]] = a; }
+    }
+    if (opt_inh & 1) {   /* children start from the parent's S, T, restricted (inherit_st) */
+        Sp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Sp, w->Sp, sizeof(double) * NMAX * NMAX);
+        Tp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Tp, w->Tp, sizeof(double) * NMAX * NMAX);
     }
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
         if (Xp) { unsigned long long pci = g_prof ? __rdtsc() : 0; inherit_x(w, (const double (*)[NMAX])Xp, ev.m, posF[ch[c].i], posL[ch[c].j]); PROF_T(0, 11, pci); }
+        if (Sp) inherit_st(w, (const double (*)[NMAX])Sp, (const double (*)[NMAX])Tp, trp, ev.m, posF[ch[c].i], posL[ch[c].j]);
         g_chs[d0] = ch; g_nch[d0] = nch; g_cidx[d0] = c;
         g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
         dfs(nd, w, st, who);
         nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
     }
-    free(Xp);
+    free(Xp); free(Sp); free(Tp);
     if (opt_fb) memcpy(nd->fb, fbsave, sizeof fbsave);
     g_curdepth = d0;
 }
@@ -2093,7 +2120,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
  * search), and the dives start from each surviving node at depth L. The estimate is
  * exact count above L plus, for each frontier node, the mean of its own dives: the
  * randomness is confined below L, where single subtrees are smaller. */
-static int opt_top = 0; static const char *g_tlog = NULL;
+static int opt_top = 0, opt_coldest = 0; static const char *g_tlog = NULL;
 /* depth profile of the estimate: nodes, time and nodes fathomed after evaluation, by depth */
 static double g_pN[NMAX + 2], g_pT[NMAX + 2], g_pF[NMAX + 2], g_wsc = 1;
 typedef struct { node_t *v; int n, cap; double cnt, t; } frontier_t;
@@ -2106,8 +2133,17 @@ static void top_enum(node_t *nd, work_t *w, frontier_t *F) {
     if (opt_fb) add_fb(nd, &ev, w);
     child_t ch[NMAX]; int nch = branch(nd, w, &ev, ch, 0);
     F->cnt++; F->t += now() - t; g_pN[nd->depth]++; g_pT[nd->depth] += now() - t;
+    double (*Xp)[NMAX] = NULL, (*Sp)[NMAX] = NULL, (*Tp)[NMAX] = NULL; double trp = w->trST; int posF[NMAX], posL[NMAX];
+    if (!opt_coldest) {
+        for (int a = 0; a < ev.m; a++) { posF[ev.F[a]] = a; posL[ev.L[a]] = a; }
+        if (opt_warm & 2) { Xp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Xp, w->X, sizeof(double) * NMAX * NMAX); }
+        if (opt_inh & 1) { Sp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Sp, w->Sp, sizeof(double) * NMAX * NMAX);
+            Tp = malloc(sizeof(double) * NMAX * NMAX); memcpy(Tp, w->Tp, sizeof(double) * NMAX * NMAX); }
+    }
     for (int c = 0; c < nch; c++) {
         if (ch[c].lb > prune_thr(g_ub)) continue;
+        if (Xp) inherit_x(w, (const double (*)[NMAX])Xp, ev.m, posF[ch[c].i], posL[ch[c].j]);
+        if (Sp) inherit_st(w, (const double (*)[NMAX])Sp, (const double (*)[NMAX])Tp, trp, ev.m, posF[ch[c].i], posL[ch[c].j]);
         nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
         if (nd->depth >= opt_top) {
             if (F->n == F->cap) { F->cap = F->cap ? 2 * F->cap : 256; F->v = realloc(F->v, sizeof(node_t) * F->cap); }
@@ -2115,6 +2151,8 @@ static void top_enum(node_t *nd, work_t *w, frontier_t *F) {
         } else top_enum(nd, w, F);
         nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
     }
+    w->x0_ok = 0; w->inh_ok = 0;   /* a frontier node stored for the dives is evaluated later from its own start */
+    free(Xp); free(Sp); free(Tp);
     memcpy(nd->fb, fbsave, sizeof fbsave);
 }
 /* one dive from node start; returns the weighted node count and time of the dive */
@@ -2142,6 +2180,11 @@ static void dive_from(const node_t *start, work_t *w, rng_t *r, double *estN, do
         double x = rng_unif(r) * tot; int c = 0;
         while (c < nch - 1 && x > pr[c]) { x -= pr[c]; c++; }
         weight *= tot / pr[c];
+        if (!opt_coldest) {   /* the chosen child starts as in the search: parent's point and, with -inh, parent's S, T */
+            int pf = 0, pl = 0; for (int a = 0; a < ev.m; a++) { if (ev.F[a] == ch[c].i) pf = a; if (ev.L[a] == ch[c].j) pl = a; }
+            if (opt_warm & 2) inherit_x(w, w->X, ev.m, pf, pl);
+            if (opt_inh & 1) inherit_st(w, w->Sp, w->Tp, w->trST, ev.m, pf, pl);
+        }
         nd.rc[ch[c].i] = ch[c].j; nd.cr[ch[c].j] = ch[c].i; nd.depth++;
     }
 }
@@ -2470,6 +2513,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-ext")) { opt_ext = atoi(argv[++a]); opt_extd = atof(argv[++a]); }
         else if (!strcmp(argv[a], "-extn")) opt_extn = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-fstop")) { opt_fstopm = atoi(argv[++a]); opt_fstopl = atoi(argv[++a]); }
+        else if (!strcmp(argv[a], "-inh")) { opt_inh = atoi(argv[++a]); atexit(print_inh); }
+        else if (!strcmp(argv[a], "-coldest")) opt_coldest = 1;
         else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
         else if (!strcmp(argv[a], "-gapstat")) { g_gapstat = 1; atexit(print_gap); }

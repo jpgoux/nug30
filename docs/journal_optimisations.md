@@ -644,3 +644,46 @@ Question de Jean-Pierre : au-delà du groupe de la grille, existe-t-il des sous-
 **Agrégation (reformulation à branchement grossier).** Regrouper en un seul nœud les g arrangements des usines fixées sur les cases fixées, borné une fois par QPB avec paires interdites. Aux profondeurs 8 à 10, 3 à 8 % des affectations partielles candidates survivent à la borne ; un nœud grossier n'est élagué que si aucun de ses g membres ne survit, soit (1 − p)^g : 29 % des nœuds grossiers pour g = 24 et p = 0,05, et aucun pour g = 9 !. Au mieux, travail 0,71 + 1/24 ≈ 0,75 du travail fin, soit ×1,3, avec une borne grossière plus faible que celle de ses membres. Pas de fonte de la complexité par cette voie.
 
 **Conclusion.** Les flux de nug30 sont génériques : la seule symétrie est celle de la grille (÷4), déjà utilisée. La difficulté de nug30 tient au nombre de permutations proches de l'optimum, que chaque nœud « dur » des profondeurs 8 à 10 contient ; aucune borne mesurée n'élague ces nœuds, et aucune symétrie ne les regroupe.
+
+## Les couches basses regardées une dernière fois : profil d'un nœud nug30 et héritage de S, T (27 octobre, 17 h 30 à 19 h 30 UTC)
+
+Question de Jean-Pierre : reste-t-il une pépite (×3 au moins) dans les couches basses hors borne (LAP, Frank-Wolfe, mise en place du nœud) ? Réponse par la mesure.
+
+### Profil phase par phase (option `-prof`, binaire b78)
+
+Chronomètre rdtsc (2,1 GHz) autour de chaque phase de l'évaluation d'un nœud, comptes séparés pour les nœuds de la recherche et les enfants de l'anticipation. Estimation nug30 (`-top 3 -dives 1000`, graine 11, règle retenue) : 27 257 nœuds de recherche (235 au sommet, 6 120 à la frontière, 20 902 dans les plongées, profondeurs 4 à 11) et 4,36 millions d'enfants anticipés (règles 4 et 3 des niveaux 0 à 4).
+
+| phase | nœuds de recherche (par appel) | appels par nœud | enfants anticipés (par appel) |
+|---|---|---|---|
+| mise en place de K, Ar, Br, Cr | 5,3 µs | 1 | 3,3 µs |
+| décomposition spectrale (cache manqué) | 59,9 µs | 1,2 | 56,5 µs (0,07 par enfant : les frères partagent les ensembles) |
+| LAP des valeurs propres et construction de S, T | 19,2 µs | 1 | 14,5 µs |
+| LAP de la première itération | 13,2 µs | 1 | 12,3 µs |
+| LAP des itérations suivantes | 7,7 µs | 48 | 8,1 µs (17,6 par enfant) |
+| application de la permutation (A P B incrémental) | 2,9 µs | 49 | 3,1 µs |
+| pas de Frank-Wolfe (mise à jour fusionnée) | 0,5 µs | 49 | 0,5 µs |
+| mise à jour de (s, t) toutes les 30 itérations | 19,6 µs | 1,3 | 33 µs |
+
+Les nœuds des plongées sont des nœuds qui branchent pour 70 % d'entre eux (une plongée ne s'arrête qu'à un nœud élagué), d'où les 48 itérations par nœud ; l'arbre réel, lui, élague 80 % de ses nœuds en 6 itérations environ et en fait brancher 20 % en 35 à 52 (journal `-fwlog`). Avec les coûts par phase ci-dessus, aux profondeurs 7 à 10 (m = 20 à 23) où se passe le temps de nug30 :
+
+- coût fixe d'un nœud, quelle que soit son issue : 5 + 60 à 72 + 19 + 13 ≈ 100 µs, dont la décomposition spectrale des colonnes libres (chaque enfant d'un branchement sur une ligne a un ensemble de cases libres différent, le cache ne sert qu'aux lignes) ;
+- coût d'une itération : 7,7 + 2,9 + 0,5 = 11,2 µs, LAP à 69 % ;
+- nœud élagué ≈ 100 + 6 × 11 = 167 µs ; nœud qui branche ≈ 100 + 45 × 11 + 20 = 625 µs ; moyenne 0,8 × 167 + 0,2 × 625 ≈ 260 µs, ce que confirme le profil de l'estimateur (328, 309, 247 et 220 µs par nœud aux profondeurs 7, 8, 9 et 10).
+
+Répartition du temps de nug30 : itérations de Frank-Wolfe 61 % (LAP 42 %, A P B 16 %, pas 3 %), coûts fixes 39 % (décomposition spectrale 25 %, construction de S, T 7 %, premier LAP 5 %, reste 2 %). Aucune phase ne pèse ×3 : supprimer entièrement la décomposition spectrale et la construction de S, T, sans rien perdre, donnerait ×1,4 ; le LAP a déjà reçu les réductions sans branchement (A4), les plus courts chemins (A5), et les essais SIMD, simple précision, LAP groupés, départ JV (tableau des essais sans gain). Un ×3 ne peut venir des couches basses ; il faudrait un nœud à 85 µs, moins que 100 µs de coût fixe actuel.
+
+### Héritage de S, T du père (option `-inh`, binaire b79)
+
+Idée : économiser le coût fixe (décomposition spectrale, LAP des valeurs propres, construction) pour les 80 % de nœuds qui seront élagués en 6 itérations. L'enfant (a, b) part des matrices du père restreintes, S′ = S[−a, −a], T′ = T[−b, −b], tr S′T′ = tr ST − S_aa − T_bb : la fonction du père restreinte à la face x_ab = 1 reste convexe et égale au coût sur les permutations, la borne est valide (vérifié par `make test`, nœud par nœud contre la force brute). S′, T′ ne sont plus les matrices qui maximisent tr ST sur l'espace de l'enfant : la borne est plus faible. S'il atteint l'itération 30, le nœud calcule ses propres S, T et continue.
+
+| instance | témoin | -inh 1 (enfants de la recherche) | -inh 3 (aussi les enfants anticipés) |
+|---|---|---|---|
+| nug15 | 1 023 nœuds | 1 059 nœuds (+3,5 %) | 2 255 nœuds (×2,2) |
+| nug20 | 467 686 nœuds, 18,4 M it., 70,2 s | 491 429 (+5 %), 20,8 M (+13 %), 72,2 s (+3 %) | 659 896 (+41 %), 28,3 M, 94,1 s |
+| nug22 | 1 033 874 nœuds, 21,7 M it., 107 s | 1 130 503 (+9 %), 28,5 M (+31 %), 120 s (+12 %) | 1 219 453 (+18 %), 32,6 M, 136 s |
+
+Un cœur chacun, quatre calculs ensemble, `-ub opt+1 -nointprune`. Sur nug20, 30 % des nœuds héritiers atteignent l'itération 30 et paient quand même leur mise en place ; sur nug22, 32 %. Les enfants anticipés, limités à 18 ou 35 itérations, ne passent jamais à leurs propres matrices : leur borne plus faible choisit de moins bonnes lignes de branchement, d'où ×2,2 sur nug15. Perdant partout, et de plus en plus avec la taille. Estimations nug30 (graines 11 et 13, témoin contre `-inh 1`) lancées à 18 h 54 pour le juger là où il compte ; résultat attendu dans ce journal.
+
+### L'estimateur évaluait ses nœuds à froid
+
+En relisant `dive_from` et `top_enum` : les nœuds de l'estimateur partaient d'un point X neutre, alors que la recherche part du point du père (`inherit_x`). Les itérations par nœud, donc les temps estimés, étaient surestimés d'une quantité inconnue. Le binaire b79 fait partir les nœuds de l'estimateur comme ceux de la recherche (`-coldest` rétablit l'ancien comportement). Étalonnage lancé à 18 h 54 sur nug24 (graine 11, à chaud contre à froid) face au calcul réel de 15 425 124 nœuds et 1 962 s ; résultat attendu dans ce journal. Toutes les estimations nug30 du journal jusqu'ici sont à froid ; leurs comparaisons entre variantes restent valables (même biais), leurs temps absolus sont à reprendre.
