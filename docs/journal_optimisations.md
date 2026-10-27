@@ -367,3 +367,16 @@ Estimation nug30 (`estimate -strat D -ub 6125 -nointprune -top 3 -dives 2000`, l
 | 7 | -brecc 4 6 | 1,78e10 (×1,42) | 4,06e6 s (×2,01) |
 
 Contrôle : à graine égale, l'ancien binaire b65 et le nouveau donnent la même estimation sans `-brecc` (7,829e9 sur la première moitié de la frontière de la graine 11). Le gain sur nug30 est du même ordre que sur nug20 et nug22. Temps total estimé : 1,7e6 à 4,1e6 s sur un cœur, soit 5 à 12 jours sur 4 cœurs au lieu de 9 à 24. Une estimation à 2 000 plongées varie du simple au double d'une graine à l'autre ; les rapports à graine égale sont plus fiables que les valeurs absolues.
+
+Variante sans réglage de profondeur (option `-brtie`, 27 octobre, 01 h 05 UTC). Sur les données de l'oracle, la règle « le moins d'enfants vivants, puis à égalité la ligne de A la plus excentrée (au lieu de la plus grande somme de U) » donne 0,75 de la règle actuelle à la profondeur 4 et 0,97 à la profondeur 7 : elle ne perd nulle part, alors que la règle statique perd à la profondeur 7. Arbres complets (stratégie C, symétries, parité) :
+
+| instance | réglage | nœuds | itérations FW |
+|---|---|---|---|
+| nug20 | -brtie | 691 643 (×1,30) | 12,0 M |
+| nug20 | -brtie -brecc 4 5 | 599 516 (×1,50) | 9,85 M |
+| nug22 | -brtie | 1 333 261 (×1,34) | 18,1 M |
+| nug22 | -brtie -brecc 4 6 | **1 246 955 (×1,43)** | 15,8 M |
+
+Oracle à la profondeur 3 (règle 3 avec anticipation, 39 nœuds) : la meilleure ligne fait ×1,82 de moins ; c'est presque toujours la colonne de l'usine 5 (34 nœuds sur 39), sans que nous sachions encore quelle propriété des flots la distingue. La case la plus excentrée n'y donne que 0,86.
+
+Réglage sur nug30 (estimations, mêmes nœuds de frontière comparés, 70 % de la frontière) : graine 11, règle aux profondeurs 5-6 ×1,85 en nœuds et ×1,87 en temps, 5-8 ×1,84 et ×1,59, 5-12 ×1,57 et ×1,53 ; graine 7, 5-6 ×1,40 et ×1,83, 5-8 ×2,13 et ×1,55. Les profondeurs 5-6 restent le meilleur compromis en temps.
