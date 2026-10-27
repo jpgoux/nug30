@@ -1597,6 +1597,7 @@ static int cmp_child(const void *a, const void *b) {
  * gives all b at once: O(m^3) per node. U_ab is replaced by this minimum, which is >= U_ab and
  * keeps cost(P) >= z + U'_ab for every P with P_ab = 1 (the elimination and branching rules
  * use U only through such single-pair bounds and sums of them). */
+static int opt_brecc_lo = 0, opt_brecc_hi = -1; static double g_rowsumA[NMAX];
 static int opt_sens = 0;
 static void sharpen_U(work_t *w, int m) {
     if (!w->up_ok) return;
@@ -1676,6 +1677,10 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         else if (cnt < best_cnt || (cnt == best_cnt && s > best_sum)) { best_cnt = cnt; best_sum = s; best_kind = 1; best_line = b; }
     }
     if (opt_fixorder) { best_kind = 0; best_line = 0; }   /* -fixorder: lowest free row, for bound comparisons */
+    if (opt_brecc_hi >= 0 && nd->depth >= opt_brecc_lo && nd->depth <= opt_brecc_hi && allow_row && rule_at(nd->depth)->rule == 2) {
+        /* -brecc lo hi: branch on the free row whose A row sum is largest (on a grid: the most eccentric cell) */
+        double bs = -INFINITY; for (int a = 0; a < m; a++) { double e = g_rowsumA[ev->F[a]]; if (e > bs) { bs = e; best_kind = 0; best_line = a; } }
+    }
     /* Rules 3 and 4 (Brixius-Anstreicher 2001): prospective bounds on the
      * NBEST rows and NBEST columns with the largest sums of U (Rule 1 order). */
     const rule_t *R = rule_at(nd->depth);
@@ -2356,6 +2361,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-strat")) strat_name = argv[++a][0];
         else if (!strcmp(argv[a], "-nointprune")) opt_intprune = 0;
         else if (!strcmp(argv[a], "-nopar")) opt_par = 0;
+        else if (!strcmp(argv[a], "-brecc")) { opt_brecc_lo = atoi(argv[++a]); opt_brecc_hi = atoi(argv[++a]); }
         else if (!strcmp(argv[a], "-prog")) g_prog = argv[++a];
         else if (!strcmp(argv[a], "-ckpt")) opt_ckpt = argv[++a];
         else if (!strcmp(argv[a], "-ckpt_s")) opt_ckpt_s = atof(argv[++a]);
@@ -2366,6 +2372,7 @@ int main(int argc, char **argv) {
     set_strategy(strat_name);
     g_t0 = now();
     compute_aut(A, &GA); compute_aut(B, &GB);
+    for (int i = 0; i < N; i++) { double t = 0; for (int k = 0; k < N; k++) t += A[i][k]; g_rowsumA[i] = t; }
     if (opt_par) {   /* A, B symmetric with zero diagonal: cost = 2 sum_{i<k} A_ik B_p(i)p(k), a multiple of 2 gcd(A) gcd(B) */
         long ga = 0, gb = 0; int ok = 1;
         for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) {
@@ -2587,6 +2594,49 @@ int main(int argc, char **argv) {
             printf("F %d %ld %.3f", f, (long)g_nodes_all - n0, now() - t);
             for (int i = 0; i < N; i++) if (F.v[f].rc[i] >= 0) printf(" %d:%d", i, F.v[f].rc[i]);
             printf("\n"); fflush(stdout);
+        }
+        return 0;
+    }
+    if (!strcmp(mode, "oracle")) {   /* branching oracle: at sampled frontier nodes (depth -top L), the exact subtree size under each branching line */
+        work_t *w = calloc(1, sizeof(work_t)), *w2 = calloc(1, sizeof(work_t));
+        node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0;
+        frontier_t F = {0}; top_enum(&root, w, &F);
+        int step = getenv("STEP") ? atoi(getenv("STEP")) : 1, off = getenv("OFF") ? atoi(getenv("OFF")) : 0;
+        printf("# top %d: %d frontier nodes, ub %.0f, every %d-th from %d\n", opt_top, F.n, (double)g_ub, step, off);
+        static double Xs[NMAX][NMAX];
+        for (int f = off; f < F.n; f += step) {
+            node_t nd = F.v[f]; eval_t ev; const rule_t *R = rule_at(nd.depth);
+            w->x0_ok = 0; eval_node(&nd, w, &ev, R->nfw1, R->nfw2, 0);
+            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) continue;
+            int m = ev.m; double thr = prune_thr(g_ub), U[NMAX][NMAX]; memcpy(Xs, w->X, sizeof Xs);
+            for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) U[a][b] = w->U[a][b];
+            child_t ch[NMAX]; int nch = branch(&nd, w, &ev, ch, 0);
+            int dk = -1, dl = -1;   /* the default line */
+            if (nch >= 2) { if (ch[0].i == ch[1].i) dk = 0; else dk = 1; }
+            else if (nch == 1) dk = 0;
+            if (dk == 0 && nch) for (int a = 0; a < m; a++) if (ev.F[a] == ch[0].i) dl = a;
+            if (dk == 1) for (int b = 0; b < m; b++) if (ev.L[b] == ch[0].j) dl = b;
+            printf("N %d m %d z %.2f default %d:%d F", f, m, ev.z, dk, dl);
+            for (int a = 0; a < m; a++) printf("%s%d", a ? "," : " ", ev.F[a]);
+            printf(" L"); for (int b = 0; b < m; b++) printf("%s%d", b ? "," : " ", ev.L[b]);
+            printf(" U"); for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) printf("%s%.1f", a + b ? "," : " ", U[a][b]);
+            printf(" S");
+            long best = -1, dsz = -1;
+            for (int kind = 0; kind < 2; kind++) for (int line = 0; line < m; line++) {
+                long n0 = (long)g_nodes_all; double t = now();
+                for (int o = 0; o < m; o++) {
+                    int a = kind == 0 ? line : o, b = kind == 0 ? o : line;
+                    if (ev.z + U[a][b] > thr) continue;
+                    node_t c = nd; c.rc[ev.F[a]] = ev.L[b]; c.cr[ev.L[b]] = ev.F[a]; c.depth++;
+                    inherit_x(w2, (const double (*)[NMAX])Xs, m, a, b);
+                    stats_t st; memset(&st, 0, sizeof st); dfs(&c, w2, &st, 0);
+                }
+                long sz = 1 + (long)g_nodes_all - n0;
+                printf(" %ld/%.3f", sz, now() - t); fflush(stdout);
+                if (best < 0 || sz < best) best = sz;
+                if (kind == dk && line == dl) dsz = sz;
+            }
+            printf(" | default %ld best %ld\n", dsz, best); fflush(stdout);
         }
         return 0;
     }

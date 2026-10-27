@@ -324,3 +324,34 @@ Idée de la nuit, simple et valide. Quand A et B sont symétriques, entiers et d
 nug20, stratégie C, ub = 2 570 (preuve d'optimalité) : 992 813 nœuds avec le seuil du banc, 944 243 avec l'élagage entier, **898 920 avec la parité** (−4,8 % de plus, −9,5 % au total). Contrôle : nug12 à nug18 lancés avec ub = opt + 2 et sans heuristique retrouvent tous l'optimum.
 
 Prolongement essayé et abandonné le même soir : sur une grille, la distance de Manhattan est impaire exactement entre cases de couleurs opposées, si bien que coût/2 mod 2 = nombre (mod 2) d'usines « impaires » (degré impair dans le graphe des flots impairs) posées sur les cases noires. Le coût est alors connu modulo 4 dès que ce nombre est fixé, ce qui gagnerait encore 2 sur la moitié des nœuds. Mesure sur nug14 : la classe n'est déterminée à aucun des 17 808 nœuds évalués, car il faut avoir placé toutes ces usines ou rempli toutes les cases d'une couleur. Code retiré.
+
+### L'oracle de branchement et la case la plus excentrée (27 octobre, 00 h 30 UTC)
+
+Question : la règle de branchement (règle 2 de Brixius et Anstreicher : la ligne qui laisse le moins d'enfants vivants selon z + U, puis la plus grande somme de U) est-elle loin du meilleur choix ? Mode `oracle` : à des nœuds tirés de la frontière de profondeur L, on évalue le nœud, puis pour chacune des 2m lignes possibles (m lignes de la matrice A, m colonnes) on résout exactement tous les sous-arbres des enfants avec la règle actuelle, et on compte les nœuds. C'est un oracle à un seul niveau : en dessous, la règle reste celle du code. Scripts d'analyse : experiments/oracle_*.py.
+
+nug20, sans symétries, ub = 2 570 :
+
+| profondeur | nœuds | règle actuelle | meilleure ligne | rapport |
+|---|---|---|---|---|
+| 4 (m = 16) | 794 | 79 799 | 39 035 | ×2,04 |
+| 7 (m = 13) | 495 | 3 601 | 3 079 | ×1,17 |
+
+Le motif est net à la profondeur 4 : la meilleure ligne est le plus souvent une ligne de A (une case de la grille, A étant la matrice des distances) et ces cases sont les coins (0, 4, 15, 19). Règle statique « brancher sur la case libre dont la somme des distances est la plus grande » : 0,71 fois la taille de la règle actuelle à la profondeur 4 ; à la profondeur 7 elle perd (1,18). Une régression sur la moitié des nœuds (nombre d'enfants vivants, somme pondérée des écarts au seuil, excentricité) ne fait pas mieux sur l'autre moitié (0,70).
+
+Arbres complets, stratégie C, symétries et parité, option `-brecc lo hi` (la règle statique aux profondeurs lo à hi où la règle 2 s'applique) :
+
+| instance | réglage | nœuds | itérations FW |
+|---|---|---|---|
+| nug20 | règle actuelle | 898 920 | 14,4 M |
+| nug20 | -brecc 4 4 | 720 319 | |
+| nug20 | -brecc 4 5 | **601 580 (×1,49)** | 9,86 M |
+| nug20 | -brecc 4 6 | 653 658 | |
+| nug20 | -brecc 4 7 | 692 426 | |
+| nug20 | -brecc 5 6 | 797 058 | |
+| nug20 | -brecc 0 30 | 702 113 | |
+| nug22 | règle actuelle | 1 782 411 | 22,5 M |
+| nug22 | -brecc 4 5 | 1 313 809 (×1,36) | 17,1 M |
+| nug22 | -brecc 4 6 | **1 290 407 (×1,38)** | 16,2 M |
+| nug22 | -brecc 0 30 | 1 339 051 (×1,33) | 14,6 M |
+
+Le réglage des profondeurs a été choisi sur nug20 ; nug22 sert de contrôle et le gain s'y retrouve (×1,33 à ×1,38, y compris avec la règle appliquée partout). Les temps de ces essais ont été pris avec quatre calculs en parallèle et ne sont pas comparables entre eux ; le travail (itérations de Frank-Wolfe) suit les nœuds. Mesure propre des temps et estimation sur nug30 à suivre.
