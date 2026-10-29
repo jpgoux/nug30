@@ -687,3 +687,22 @@ Un cœur chacun, quatre calculs ensemble, `-ub opt+1 -nointprune`. Sur nug20, 30
 ### L'estimateur évaluait ses nœuds à froid
 
 En relisant `dive_from` et `top_enum` : les nœuds de l'estimateur partaient d'un point X neutre, alors que la recherche part du point du père (`inherit_x`). Les itérations par nœud, donc les temps estimés, étaient surestimés d'une quantité inconnue. Le binaire b79 fait partir les nœuds de l'estimateur comme ceux de la recherche (`-coldest` rétablit l'ancien comportement). Étalonnage lancé à 18 h 54 sur nug24 (graine 11, à chaud contre à froid) face au calcul réel de 15 425 124 nœuds et 1 962 s ; résultat attendu dans ce journal. Toutes les estimations nug30 du journal jusqu'ici sont à froid ; leurs comparaisons entre variantes restent valables (même biais), leurs temps absolus sont à reprendre.
+
+**Étalonnage sur nug24 (19 h 10 UTC).** Deux tirages, `-top 3 -dives 1000` (2 656 plongées), face au calcul réel de 15 425 124 nœuds et 1 962 s :
+
+| tirage | à chaud (nouveau défaut) | à froid (ancien) |
+|---|---|---|
+| 11 | 1,02e7 nœuds (0,66 du réel), 1 570 s (0,80) | 1,70e7 nœuds (1,11), 2 220 s (1,13) |
+| 13 | 1,20e7 nœuds (0,77), 1 766 s (0,90) | 2,65e7 nœuds (1,72), 4 097 s (2,09) |
+
+À chaud, l'estimateur sous-estime les nœuds d'un quart et le temps de 15 %, avec un écart entre tirages de 17 % ; à froid il surestime, avec un écart de 55 % entre tirages. Le départ à chaud reste le défaut. Les temps nug30 du journal (2,2e6 et 3,0e6 s à froid) sont à diviser par 1,5 environ ; les estimations à chaud de nug30 en cours donneront la valeur directe.
+
+**Héritage de S, T jugé sur nug30, tirage 11 (19 h 13 UTC).** Estimations à chaud, `-top 3 -dives 1000`, lancées ensemble : témoin 5,15e9 nœuds et 1,02e6 s ; `-inh 1` 5,24e9 nœuds (+2 %) et 1,01e6 s (−1 %). Sans effet mesurable ; 81 % des nœuds héritiers des plongées atteignent l'itération 30 et paient leur mise en place (les plongées suivent surtout des nœuds qui branchent). Tirage 13 en cours. Première estimation à chaud de nug30 avec la règle retenue : 1,02e6 s sur un cœur, soit 285 heures-cœur, contre 2,2e6 s à froid pour le même tirage.
+
+**Tirage 13 (19 h 31 UTC).** Témoin 8,45e9 nœuds et 1,72e6 s ; `-inh 1` 8,35e9 nœuds (−1 %) et 1,40e6 s (−19 %). Avec le tirage 11 (−1 %), moyenne géométrique −10 % en temps estimé pour des arbres égaux à 2 % près : l'écart vient du temps par nœud dans les plongées, où 81 % des nœuds héritiers atteignent l'itération 30. L'estimateur ne tranche pas à ce niveau ; comme l'option perd sur nug20 et nug22 (temps mesurés, pas estimés), elle reste désactivée. Une mesure directe sur un sous-arbre réel de nug30 est la seule façon de conclure.
+
+**nug30 à chaud, quatre tirages (19 h 35 UTC).** Règle retenue, stratégie D, `-top 3 -dives 1000` : tirage 7, 2,12e10 nœuds et 3,34e6 s ; 11, 5,15e9 et 1,02e6 s ; 13, 8,45e9 et 1,72e6 s ; 17, 2,28e10 et 3,72e6 s. Moyenne géométrique 2,16e6 s sur un cœur, soit **600 heures-cœur** (de 285 à 1 030 selon le tirage), contre 890 à froid sur les mêmes tirages (rapport 0,68, cohérent avec l'étalonnage nug24 : 0,85 contre 1,54 du réel). Avec le facteur 0,85 de nug24, nug30 demanderait environ 700 heures-cœur au code actuel, soit sept jours sur quatre cœurs ; l'objectif de 96 heures-cœur reste à ×7.
+
+**Mesure directe de `-inh` sur des sous-arbres réels (lancée à 19 h 33 UTC).** Mode `frontier` : les sous-arbres des nœuds de profondeur 3, dans l'ordre de l'énumération, résolus en entier par le code de recherche, témoin et `-inh 1` en parallèle pendant 45 minutes ; comparaison sur les sous-arbres communs.
+
+**Mesure directe, premier essai (20 h 20 UTC).** En 45 minutes, aucun des deux calculs n'a fini le premier sous-arbre de profondeur 3 (le plus prometteur, donc le plus gros, vient en premier). Relancé pour 3 heures, même protocole.

@@ -4,3 +4,4 @@ src/qap_bb
 src/test_qap
 src/regress.out
 src/regress_dom.out
+src/dnntest
