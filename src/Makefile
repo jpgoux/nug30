@@ -1,14 +1,17 @@
 CC ?= gcc
 CFLAGS ?= -O3 -march=native -funroll-loops -fno-math-errno -fno-trapping-math -Wall -Wno-misleading-indentation -Wno-unused-function
-LIBS ?= -llapack -lblas -lm -lpthread
+LIBS ?= -llapack -lopenblas -lm -lpthread
 
 all: qap_bb
 
-qap_bb: qap_bb.c
-	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+qap_bb: qap_bb.c dnn.c dnn.h
+	$(CC) $(CFLAGS) -o $@ qap_bb.c dnn.c $(LIBS)
 
-test_qap: test_qap.c qap_bb.c
-	$(CC) $(CFLAGS) -o $@ $< $(LIBS)
+test_qap: test_qap.c qap_bb.c dnn.c dnn.h
+	$(CC) $(CFLAGS) -o $@ test_qap.c dnn.c $(LIBS)
+
+dnntest: dnntest.c dnn.c dnn.h
+	$(CC) $(CFLAGS) -o $@ dnntest.c dnn.c $(LIBS)
 
 # unit tests against brute force, regression bench (optimum and node count; FW iteration
 # counts are kept in the expected files but not compared, they move with the processor),
