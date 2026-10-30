@@ -2075,6 +2075,7 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     if (keep) { if (!ms->Z) ms->Z = malloc(sizeof(double) * (long)(N * N + 1) * (N * N + 1)); o.Zout = ms->Z; ms->ok = 0; }
     double t0 = now(); dnn_bound(&P, &o, &r); double dt = now() - t0;
     free(Z0);
+    if (getenv("DNN_LOG")) fprintf(stderr, "dnnlog depth %d m %d K %.1f bound %.3f cutoff %.1f iters %d fath %d gu %d warm %d t %.2f\n", depth, m, K, r.bound, o.cutoff, r.iters, r.fathomed, r.gaveup, Z0 != NULL, dt);
     if (keep && !r.fathomed) { ms->ok = 1; ms->m = m; memcpy(ms->F, ev->F, sizeof(int) * m); memcpy(ms->L, ev->L, sizeof(int) * m); memcpy(ms->rc, nd->rc, sizeof(int) * N); }
     __atomic_fetch_add(&g_dnn_calls[depth], 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_dnn_iters[depth], r.iters, __ATOMIC_RELAXED);
     if (r.fathomed) __atomic_fetch_add(&g_dnn_fath[depth], 1, __ATOMIC_RELAXED);
@@ -2613,7 +2614,7 @@ int main(int argc, char **argv) {
     if (opt_par) {   /* A, B symmetric with zero diagonal: cost = 2 sum_{i<k} A_ik B_p(i)p(k), a multiple of 2 gcd(A) gcd(B) */
         long ga = 0, gb = 0; int ok = 1;
         for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) {
-            if (A[i][j] != floor(A[i][j]) || B[i][j] != floor(B[i][j]) || (i == j && (A[i][i] != 0 || B[i][i] != 0))) ok = 0;
+            if (A[i][j] != floor(A[i][j]) || B[i][j] != floor(B[i][j]) || (i == j && (A[i][i] != 0 || B[i][i] != 0)) || A[i][j] != A[j][i] || B[i][j] != B[j][i]) ok = 0;
             ga = lgcd(ga, labs((long)A[i][j])); gb = lgcd(gb, labs((long)B[i][j])); }
         g_gran = ok && ga && gb ? 2 * ga * gb : 1;
         if (opt_verbose) fprintf(stderr, "cost granularity %ld\n", g_gran);
