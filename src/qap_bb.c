@@ -2035,7 +2035,7 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
-static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10;
+static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100;
 static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_iters[NMAX + 1], g_dnn_gu[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
@@ -2049,7 +2049,7 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     double A[DNN_MMAX * DNN_MMAX], B[DNN_MMAX * DNN_MMAX], C[DNN_MMAX * DNN_MMAX];
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { A[a * m + b] = Ar[a][b]; B[a * m + b] = Br[a][b]; C[a * m + b] = Cr[a][b]; }
     dnn_prob_t P = {m, A, B, C, K}; dnn_opt_t o = {0}; dnn_res_t r;
-    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup;
+    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin;
     int N2 = m * m + 1; double *Z0 = NULL;
     dnnslot_t *ps = depth > 0 ? &tl_dz[depth - 1] : NULL;
     if (opt_dnn_warm && ps && ps->ok && ps->m == m + 1) {   /* is this node a child of the stored one? */
@@ -2576,6 +2576,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dnndouble")) opt_dnn_single = 0;
         else if (!strcmp(argv[a], "-dnncold")) opt_dnn_warm = 0;
         else if (!strcmp(argv[a], "-dnngiveup") && a + 1 < argc) opt_dnn_giveup = atof(argv[++a]);
+        else if (!strcmp(argv[a], "-dnngumin") && a + 1 < argc) opt_dnn_gumin = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-dnnsub") && a + 1 < argc) opt_dnn_sub = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }

@@ -7,6 +7,7 @@ typedef struct {
     int maxit, cert_every, single, verbose;
     int sub;              /* > 0: subspace iteration on the negative eigenspace, full eigendecomposition every sub iterations */
     double giveup;        /* > 0: give up when best + giveup * (gain of the last 50 iterations) < cutoff */
+    int giveup_min;       /* give-up allowed from this iteration on (0: 100) */
     double beta, gamma;   /* 0: defaults beta = 0.1 m, gamma = 1.618 */
     const double *Z0;     /* optional warm start, N x N (unscaled units), N = m^2 + 1 */
     double *Zout;         /* optional: final multiplier, unscaled */

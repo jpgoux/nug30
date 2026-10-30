@@ -372,7 +372,7 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             if (o->giveup > 0) {
                 int slot = (it / every) % 64; hist[slot] = best;
                 int back = 50 / every; if (back < 1) back = 1;
-                if (it >= 100 && isfinite(hist[(slot - back + 64) % 64])) {
+                if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(hist[(slot - back + 64) % 64])) {
                     double g = best - hist[(slot - back + 64) % 64];
                     if (best + o->giveup * fmax(g, 0) < cut) { it++; res->gaveup = 1; break; }
                 }
