@@ -1203,8 +1203,16 @@ static long g_qpbf[NMAX + 1], g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn
  * unexplored sibling (children are sorted by bound, so the smallest one left) */
 static int g_pos[NMAX + 1], g_npos[NMAX + 1], g_curdepth = -1;
 static double g_nextlb[NMAX + 1];
-static void write_progress(int final) {
+static pthread_mutex_t g_prog_mtx = PTHREAD_MUTEX_INITIALIZER;
+static void write_progress_locked(int final);
+static void write_progress(int final) {   /* any worker may call it; one writes at a time */
     if (!g_prog) return;
+    if (!final && now() - g_prog_last < 10) return;
+    if (pthread_mutex_trylock(&g_prog_mtx)) return;
+    write_progress_locked(final);
+    pthread_mutex_unlock(&g_prog_mtx);
+}
+static void write_progress_locked(int final) {
     double t = now();
     if (!final && t - g_prog_last < 10) return;
     g_prog_last = t;
@@ -2376,7 +2384,10 @@ static wk_t *g_wk = NULL;
 /* checkpoint of the parallel search: pool + every worker's stack. Workers change their
  * stack under their own mutex (or under pool_lock when taking a task), so holding all
  * worker mutexes, then pool_lock, gives a consistent snapshot. Order is not preserved. */
-static void write_ckpt_par(void) {
+static pthread_mutex_t g_ckpt_mtx = PTHREAD_MUTEX_INITIALIZER;
+static void write_ckpt_par(void) {   /* any worker may call it, holding none of the worker mutexes */
+    if (pthread_mutex_trylock(&g_ckpt_mtx)) return;
+    if (now() - g_ckpt_last <= opt_ckpt_s) { pthread_mutex_unlock(&g_ckpt_mtx); return; }
     for (int k = 0; k < opt_threads; k++) pthread_mutex_lock(&g_wk[k].mtx);
     pthread_mutex_lock(&pool_lock);
     char tmp[1024]; snprintf(tmp, sizeof tmp, "%s.tmp", opt_ckpt);
@@ -2390,13 +2401,14 @@ static void write_ckpt_par(void) {
     g_ckpt_last = now();
     pthread_mutex_unlock(&pool_lock);
     for (int k = 0; k < opt_threads; k++) pthread_mutex_unlock(&g_wk[k].mtx);
+    pthread_mutex_unlock(&g_ckpt_mtx);
 }
 
 static void *worker(void *arg) {
     wk_t *me = arg;
     sitem_t *stack = me->stack;
     for (;;) {
-        if (opt_ckpt && me->id == 0 && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
+        if (opt_ckpt && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
         pthread_mutex_lock(&pool_lock);
         while (pool_n == 0 && pool_busy > 0) pthread_cond_wait(&pool_cond, &pool_lock);
         if (pool_n == 0 && pool_busy == 0) { pthread_cond_broadcast(&pool_cond); pthread_mutex_unlock(&pool_lock); break; }
@@ -2411,8 +2423,9 @@ static void *worker(void *arg) {
 
         double tstart = now();
         long nodes0 = me->st.nodes;
+#define POP_DONE() do { pthread_mutex_lock(&me->mtx); me->sp = --sp; pthread_mutex_unlock(&me->mtx); } while (0)
         while (sp > 0) {
-            if (opt_ckpt && me->id == 0 && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
+            if (opt_ckpt && now() - g_ckpt_last > opt_ckpt_s) write_ckpt_par();
             pthread_mutex_lock(&me->mtx);
             if (now() - tstart > opt_tmax) {
                 pthread_mutex_lock(&pool_lock);
@@ -2427,18 +2440,20 @@ static void *worker(void *arg) {
                 pthread_mutex_unlock(&pool_lock);
                 tstart = now();
             }
-            sitem_t cur = stack[--sp];
-            if (cur.lb > prune_thr(g_ub)) { xpar_drop(&cur.xp); me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
-            if (cur.xp) { inherit_x(me->w, (const double (*)[NMAX])cur.xp->X, cur.xp->m, cur.xp->posF[cur.ci], cur.xp->posL[cur.cj]); xpar_drop(&cur.xp); }
+            sitem_t cur = stack[sp - 1];
+            if (cur.lb > prune_thr(g_ub)) { xpar_drop(&cur.xp); me->sp = --sp; pthread_mutex_unlock(&me->mtx); continue; }
+            if (cur.xp) { inherit_x(me->w, (const double (*)[NMAX])cur.xp->X, cur.xp->m, cur.xp->posF[cur.ci], cur.xp->posL[cur.cj]); xpar_drop(&cur.xp); stack[sp - 1].xp = NULL; }
+            /* cur stays on the stack, so a checkpoint taken during its evaluation (DNN can last a minute) keeps it */
+            pthread_mutex_unlock(&me->mtx);
             eval_t ev; double t = now();
             { const rule_t *R = rule_at(cur.nd.depth); eval_node(&cur.nd, me->w, &ev, R->nfw1, R->nfw2, me->id); }
             me->st.t_bound += now() - t;
             me->st.nodes++; me->st.nodes_depth[cur.nd.depth]++;
             g_nodes_all++; __atomic_fetch_add(&g_depth_all[cur.nd.depth], 1, __ATOMIC_RELAXED);
-            if (me->id == 0 && ((me->st.nodes & 255) == 0 || cur.nd.depth <= opt_dnn_hi)) write_progress(0);
-            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { __atomic_fetch_add(&g_qpbf[cur.nd.depth], 1, __ATOMIC_RELAXED); me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
-            if (dnn_try(&cur.nd, &ev, ev.m, me->w->Ar, me->w->Br, me->w->Cr, ev.K)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
-            if ((opt_domlb && domlb(&cur.nd, &ev, me->w)) || (opt_domcov && domcov(&cur.nd, &ev, me->w))) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
+            if ((me->st.nodes & 255) == 0 || cur.nd.depth <= opt_dnn_hi) write_progress(0);
+            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { __atomic_fetch_add(&g_qpbf[cur.nd.depth], 1, __ATOMIC_RELAXED); POP_DONE(); continue; }
+            if (dnn_try(&cur.nd, &ev, ev.m, me->w->Ar, me->w->Br, me->w->Cr, ev.K)) { POP_DONE(); continue; }
+            if ((opt_domlb && domlb(&cur.nd, &ev, me->w)) || (opt_domcov && domcov(&cur.nd, &ev, me->w))) { POP_DONE(); continue; }
             if (opt_fb) add_fb(&cur.nd, &ev, me->w);
             child_t ch[NMAX]; int nch = branch(&cur.nd, me->w, &ev, ch, me->id);
             xpar_t *xp = NULL;
@@ -2447,6 +2462,7 @@ static void *worker(void *arg) {
                 memcpy(xp->X, me->w->X, sizeof(xp->X));
                 for (int a = 0; a < ev.m; a++) { xp->posF[ev.F[a]] = a; xp->posL[ev.L[a]] = a; }
             }
+            pthread_mutex_lock(&me->mtx); sp--;
             for (int c = nch - 1; c >= 0; c--) { /* push worst first so best is explored first */
                 sitem_t s; s.nd = cur.nd; s.nd.rc[ch[c].i] = ch[c].j; s.nd.cr[ch[c].j] = ch[c].i; s.nd.depth++; s.lb = ch[c].lb;
                 s.xp = xp; s.ci = ch[c].i; s.cj = ch[c].j;
@@ -2454,6 +2470,7 @@ static void *worker(void *arg) {
             }
             me->sp = sp; pthread_mutex_unlock(&me->mtx);
         }
+#undef POP_DONE
         pthread_mutex_lock(&pool_lock);
         pool_busy--; tasks_done++;
         if (g_log) { fprintf(g_log, "{\"t\":%.3f,\"event\":\"task_done\",\"worker\":%d,\"root_depth\":%d,\"nodes\":%ld,\"pool\":%d}\n", now() - g_t0, me->id, it.nd.depth, me->st.nodes - nodes0, pool_n); fflush(g_log); }
