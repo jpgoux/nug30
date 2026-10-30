@@ -193,7 +193,7 @@ static void face_out(ws_t *w, const double *R, double *Yo) {
 
 /* ---------- certificate ---------- */
 /* two-level Gilmore-Lawler bound of min <M, y y'> over lifted permutations */
-static double gl2(int m, const double *M) {
+static double gl2(int m, const double *M, double *cout) {
     int N = m * m + 1;
     double c[DNN_MMAX * DNN_MMAX], blk[DNN_MMAX * DNN_MMAX];
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) {
@@ -205,6 +205,7 @@ static double gl2(int m, const double *M) {
         double lij = m > 1 ? lap_dense(m - 1, blk, m - 1) : 0;
         c[i * m + j] = 2 * M[p] + M[(long)p * N + p] + lij;
     }
+    if (cout) memcpy(cout, c, sizeof(double) * m * m);
     return M[0] + lap_dense(m, c, m);
 }
 
@@ -263,6 +264,7 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     #define GANG(p, r) ((p) > 0 && (r) > 0 && (p) != (r) && ((((p) - 1) / m == ((r) - 1) / m) || (((p) - 1) % m == ((r) - 1) % m)))
     for (int a = 1; a < N; a++) for (int b = 1; b < N; b++) if (GANG(a, b)) Y[(long)a * N + b] = 0;
     int it, every = o->cert_every > 0 ? o->cert_every : 10, maxit = o->maxit > 0 ? o->maxit : 1000;
+    double cgl[DNN_MMAX * DNN_MMAX], cbest[DNN_MMAX * DNN_MMAX], rest = 0;   /* outer LAP costs of the best certificate, and its other terms */
     double best = -INFINITY, hist[64]; for (int k = 0; k < 64; k++) hist[k] = -INFINITY;
     int sub_p = 0, sub_redo = 0, sub_nf = getenv("DNN_NF") ? atoi(getenv("DNN_NF")) : 4; double sub_sig = 0, sub_a = 0;
     float *sH0 = o->sub ? malloc(sizeof(float) * KK) : NULL, *sQ = o->sub ? malloc(sizeof(float) * KK) : NULL, *sG = o->sub ? malloc(sizeof(float) * KK) : NULL, *sH = o->sub ? malloc(sizeof(float) * KK) : NULL, *sth = o->sub ? malloc(sizeof(float) * K) : NULL;
@@ -359,12 +361,12 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             double lam = rump_lmax(K, S, fmax(lmx, 1e-14 * (zf + 1)), scr);
             /* the face basis is applied in floating point: allowance 64 m u ||Z'||_F (report, 2.3 (i)) */
             lam += 64.0 * m * u * zf;
-            double gl = gl2(m, Mz);
+            double gl = gl2(m, Mz, o->kid ? cgl : NULL);
             double margin = (m + 1) * fmax(lam, 0) + 8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs;
             double bnd = gl - (m + 1) * lam - margin + (m + 1) * fmax(lam, 0);   /* gl - (m+1) lam - rounding allowances */
             bnd = gl - (m + 1) * lam - (8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs);
             (void)margin;
-            if (isfinite(bnd) && bnd > best) best = bnd;
+            if (isfinite(bnd) && bnd > best) { best = bnd; if (o->kid) { memcpy(cbest, cgl, sizeof(double) * m * m); rest = bnd - (gl - Mz[0]); } }
             if (o->verbose) fprintf(stderr, "dnn it %4d  cert %.6f (unscaled %.3f)  lam %.2e  nneg %d\n", it, bnd, P->s + bnd * sc, lam, nneg);
             if (best > cut) { it++; break; }
             /* give-up rule: stop when even a generous linear extrapolation of the last 50 iterations
@@ -372,7 +374,14 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             if (o->giveup > 0) {
                 int slot = (it / every) % 64; hist[slot] = best;
                 int back = 50 / every; if (back < 1) back = 1;
-                if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(hist[(slot - back + 64) % 64])) {
+                if (o->geo) {   /* Brixius' rule: d1, d2 = gains over the last two windows, r = d1/d2, allow giveup * d1 r/(1-r) */
+                    double h0 = hist[slot], h1 = hist[(slot - back + 64) % 64], h2 = hist[(slot - 2 * back + 64) % 64];
+                    if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(h2)) {
+                        double d1 = h0 - h1, d2 = h1 - h2;
+                        double r = d2 > 0 ? fmin(d1 / d2, 0.95) : (d1 > 0 ? 0.95 : 0.0);
+                        if (best + o->giveup * d1 * r / (1 - r) < cut) { it++; res->gaveup = 1; break; }
+                    }
+                } else if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(hist[(slot - back + 64) % 64])) {
                     double g = best - hist[(slot - back + 64) % 64];
                     if (best + o->giveup * fmax(g, 0) < cut) { it++; res->gaveup = 1; break; }
                 }
@@ -394,6 +403,20 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     /* rounding of the final rescale: subtract a relative allowance */
     if (isfinite(res->bound)) res->bound -= 4 * u * (fabs(P->s) + fabs(best * sc));
     res->fathomed = res->bound > o->cutoff;
+    /* children: the best certificate bounds every permutation by rest + sum_i cbest[i][pi(i)],
+     * so fixing i -> j bounds the child by rest + cbest[i][j] + LAP of the minor (i, j) */
+    if (o->kid) for (int t = 0; t < m * m; t++) o->kid[t] = -INFINITY;
+    if (o->kid && !res->fathomed && isfinite(res->bound) && m > 1) {
+        double minor[DNN_MMAX * DNN_MMAX];
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) {
+            int r = 0;
+            for (int k = 0; k < m; k++) { if (k == i) continue; int cc = 0;
+                for (int l = 0; l < m; l++) { if (l == j) continue; minor[r * (m - 1) + cc++] = cbest[k * m + l]; } r++; }
+            double v = rest + cbest[i * m + j] + lap_dense(m - 1, minor, m - 1);
+            double b = P->s + v * sc;
+            o->kid[i * m + j] = b - 4 * u * (fabs(P->s) + fabs(v * sc)) - 4 * m * u * fabs(v * sc);
+        }
+    }
     if (o->Zout) for (long t = 0; t < NN; t++) o->Zout[t] = Z[t] * sc;
     free(sH0); free(sQ); free(sG); free(sH); free(sth);
     free(L); free(Y); free(Z); free(VRV); free(Mz); free(R); free(S); free(scr);

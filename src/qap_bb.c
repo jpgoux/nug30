@@ -1198,6 +1198,8 @@ static _Atomic long g_nodes_all = 0;
 static long g_depth_all[NMAX + 1];
 /* per-depth counters for the progress file: pruned by QPB, DNN calls, pruned by DNN, DNN given up */
 static long g_qpbf[NMAX + 1], g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_gu[NMAX + 1];
+static __thread double tl_kid[NMAX * NMAX]; static __thread int tl_kid_m;   /* child bounds of the last DNN call of this thread (-dnnkid) */
+static long g_dnn_kidcut[NMAX + 1];   /* children removed by them and not by QPB */
 /* serial search position, for live monitoring: at depth d the search is in child
  * g_pos[d] (1-based) of g_npos[d] kept children; g_nextlb[d] is the bound of the next
  * unexplored sibling (children are sorted by bound, so the smallest one left) */
@@ -1704,6 +1706,11 @@ static void sharpen_U(work_t *w, int m) {
 static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who) {
     if (opt_sens) sharpen_U(w, ev->m);
     int m = ev->m; double z = ev->z, thr = prune_thr(g_ub);
+    if (tl_kid_m == m) {   /* -dnnkid: z + U[a][b] and the DNN child bound are both valid for child (a, b) */
+        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double d = tl_kid[a * m + b] - z;
+            if (d > w->U[a][b]) { if (z + w->U[a][b] <= thr && d + z > thr) __atomic_fetch_add(&g_dnn_kidcut[nd->depth], 1, __ATOMIC_RELAXED); w->U[a][b] = d; } }
+        tl_kid_m = 0;
+    }
     static __thread int idxA[GMAX], idxB[GMAX];
     int nA = opt_sym ? stab(&GA, nd->rc, idxA) : 1;   /* acts on rows: reduces column branching */
     int nB = opt_sym ? stab(&GB, nd->cr, idxB) : 1;   /* acts on columns: reduces row branching */
@@ -2047,7 +2054,7 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
-static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100;
+static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_kid = 0;
 static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_iters[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
@@ -2057,11 +2064,13 @@ static __thread dnnslot_t tl_dz[NMAX + 1];
 static long g_dnn_warm = 0;
 static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NMAX][NMAX], const double Br[NMAX][NMAX], const double Cr[NMAX][NMAX], double K) {
     int depth = nd->depth;
+    tl_kid_m = 0;
     if (opt_dnn_lo < 0 || depth < opt_dnn_lo || depth > opt_dnn_hi || m < opt_dnn_mmin) return 0;
     double A[DNN_MMAX * DNN_MMAX], B[DNN_MMAX * DNN_MMAX], C[DNN_MMAX * DNN_MMAX];
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { A[a * m + b] = Ar[a][b]; B[a * m + b] = Br[a][b]; C[a * m + b] = Cr[a][b]; }
     dnn_prob_t P = {m, A, B, C, K}; dnn_opt_t o = {0}; dnn_res_t r;
-    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin;
+    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin; o.geo = opt_dnn_geo;
+    if (opt_dnn_kid) o.kid = tl_kid;
     int N2 = m * m + 1; double *Z0 = NULL;
     dnnslot_t *ps = depth > 0 ? &tl_dz[depth - 1] : NULL;
     if (opt_dnn_warm && ps && ps->ok && ps->m == m + 1) {   /* is this node a child of the stored one? */
@@ -2087,6 +2096,7 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     if (keep) { if (!ms->Z) ms->Z = malloc(sizeof(double) * (long)(N * N + 1) * (N * N + 1)); o.Zout = ms->Z; ms->ok = 0; }
     double t0 = now(); dnn_bound(&P, &o, &r); double dt = now() - t0;
     free(Z0);
+    if (opt_dnn_kid && !r.fathomed) tl_kid_m = m;
     if (getenv("DNN_LOG")) fprintf(stderr, "dnnlog depth %d m %d K %.1f bound %.3f cutoff %.1f iters %d fath %d gu %d warm %d t %.2f\n", depth, m, K, r.bound, o.cutoff, r.iters, r.fathomed, r.gaveup, Z0 != NULL, dt);
     if (keep && !r.fathomed) { ms->ok = 1; ms->m = m; memcpy(ms->F, ev->F, sizeof(int) * m); memcpy(ms->L, ev->L, sizeof(int) * m); memcpy(ms->rc, nd->rc, sizeof(int) * N); }
     __atomic_fetch_add(&g_dnn_calls[depth], 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_dnn_iters[depth], r.iters, __ATOMIC_RELAXED);
@@ -2098,6 +2108,7 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
 static void print_dnn(void) {
     if (opt_dnn_lo < 0) return;
     fprintf(stderr, "dnn: %ld warm starts\n", g_dnn_warm);
+    for (int d = 0; d <= NMAX; d++) if (g_dnn_kidcut[d]) fprintf(stderr, "dnn depth %d: %ld children removed by the certificate's child bounds\n", d, g_dnn_kidcut[d]);
     for (int d = 0; d <= NMAX; d++) if (g_dnn_calls[d]) fprintf(stderr, "dnn depth %d: %ld calls, %ld fathomed, %ld given up, %.0f it/call, %.2f s/call\n", d, g_dnn_calls[d], g_dnn_fath[d], g_dnn_gu[d], (double)g_dnn_iters[d] / g_dnn_calls[d], g_dnn_t[d] / g_dnn_calls[d]);
 }
 static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
@@ -2599,6 +2610,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dnncold")) opt_dnn_warm = 0;
         else if (!strcmp(argv[a], "-dnngiveup") && a + 1 < argc) opt_dnn_giveup = atof(argv[++a]);
         else if (!strcmp(argv[a], "-dnngumin") && a + 1 < argc) opt_dnn_gumin = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-dnngeo")) { opt_dnn_geo = 1; opt_dnn_giveup = 5; }   /* give-up rule of Brixius' code */
+        else if (!strcmp(argv[a], "-dnnkid")) opt_dnn_kid = 1;   /* child bounds from the DNN certificate */
         else if (!strcmp(argv[a], "-dnnsub") && a + 1 < argc) opt_dnn_sub = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
