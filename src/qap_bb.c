@@ -1196,6 +1196,8 @@ static const char *g_prog = NULL;     /* progress file, rewritten every 10 s */
 static double g_prog_last = 0;
 static _Atomic long g_nodes_all = 0;
 static long g_depth_all[NMAX + 1];
+/* per-depth counters for the progress file: pruned by QPB, DNN calls, pruned by DNN, DNN given up */
+static long g_qpbf[NMAX + 1], g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_gu[NMAX + 1];
 /* serial search position, for live monitoring: at depth d the search is in child
  * g_pos[d] (1-based) of g_npos[d] kept children; g_nextlb[d] is the bound of the next
  * unexplored sibling (children are sorted by bound, so the smallest one left) */
@@ -1212,6 +1214,8 @@ static void write_progress(int final) {
     int last = 0; for (int d = 0; d <= NMAX; d++) if (g_depth_all[d]) last = d;
     for (int d = 0; d <= last; d++) fprintf(f, "%ld%s", g_depth_all[d], d < last ? "," : "");
     fprintf(f, "]");
+    const long *arr[4] = {g_qpbf, g_dnn_calls, g_dnn_fath, g_dnn_gu}; const char *nm[4] = {"qpb_fathomed", "dnn_calls", "dnn_fathomed", "dnn_gaveup"};
+    for (int k = 0; k < 4; k++) { fprintf(f, ",\"%s\":[", nm[k]); for (int d = 0; d <= last; d++) fprintf(f, "%ld%s", arr[k][d], d < last ? "," : ""); fprintf(f, "]"); }
     if (g_curdepth >= 0) {
         double lb = INFINITY;
         fprintf(f, ",\"path\":[");
@@ -2036,7 +2040,7 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
 static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100;
-static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_iters[NMAX + 1], g_dnn_gu[NMAX + 1]; static double g_dnn_t[NMAX + 1];
+static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_iters[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
 static int opt_dnn_warm = 1;
@@ -2102,7 +2106,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
             g_gaph[hi][b]++; } }
     st->nodes++; st->nodes_depth[nd->depth]++;
     g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0 || nd->depth <= opt_dnn_hi) write_progress(0);   /* DNN nodes take seconds each */
-    if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
+    if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; g_qpbf[nd->depth]++; return; }
     if (dnn_try(nd, &ev, ev.m, w->Ar, w->Br, w->Cr, ev.K)) { st->fathom_at_bound++; return; }
     if (opt_hybi) {   /* -hybi: inherited or cold RLT1 state; prune if its bound passes the threshold */
         int dd = nd->depth; double thr = prune_thr(g_ub), th0 = now(); g_hs_ok[dd] = 0;
@@ -2432,7 +2436,7 @@ static void *worker(void *arg) {
             me->st.nodes++; me->st.nodes_depth[cur.nd.depth]++;
             g_nodes_all++; __atomic_fetch_add(&g_depth_all[cur.nd.depth], 1, __ATOMIC_RELAXED);
             if (me->id == 0 && ((me->st.nodes & 255) == 0 || cur.nd.depth <= opt_dnn_hi)) write_progress(0);
-            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
+            if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { __atomic_fetch_add(&g_qpbf[cur.nd.depth], 1, __ATOMIC_RELAXED); me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             if (dnn_try(&cur.nd, &ev, ev.m, me->w->Ar, me->w->Br, me->w->Cr, ev.K)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             if ((opt_domlb && domlb(&cur.nd, &ev, me->w)) || (opt_domcov && domcov(&cur.nd, &ev, me->w))) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             if (opt_fb) add_fb(&cur.nd, &ev, me->w);
