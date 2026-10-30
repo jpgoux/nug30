@@ -2101,7 +2101,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
         if (!f && g_gapstat) { double thr = prune_thr(g_ub), g = thr - ev.z; int hi = w->flast >= thr; int b = g < 1 ? 0 : g < 2 ? 1 : g < 5 ? 2 : g < 10 ? 3 : g < 20 ? 4 : g < 50 ? 5 : 6;
             g_gaph[hi][b]++; } }
     st->nodes++; st->nodes_depth[nd->depth]++;
-    g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0) write_progress(0);
+    g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0 || nd->depth <= opt_dnn_hi) write_progress(0);   /* DNN nodes take seconds each */
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; return; }
     if (dnn_try(nd, &ev, ev.m, w->Ar, w->Br, w->Cr, ev.K)) { st->fathom_at_bound++; return; }
     if (opt_hybi) {   /* -hybi: inherited or cold RLT1 state; prune if its bound passes the threshold */
@@ -2431,7 +2431,7 @@ static void *worker(void *arg) {
             me->st.t_bound += now() - t;
             me->st.nodes++; me->st.nodes_depth[cur.nd.depth]++;
             g_nodes_all++; __atomic_fetch_add(&g_depth_all[cur.nd.depth], 1, __ATOMIC_RELAXED);
-            if (me->id == 0 && (me->st.nodes & 255) == 0) write_progress(0);
+            if (me->id == 0 && ((me->st.nodes & 255) == 0 || cur.nd.depth <= opt_dnn_hi)) write_progress(0);
             if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             if (dnn_try(&cur.nd, &ev, ev.m, me->w->Ar, me->w->Br, me->w->Cr, ev.K)) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
             if ((opt_domlb && domlb(&cur.nd, &ev, me->w)) || (opt_domcov && domcov(&cur.nd, &ev, me->w))) { me->sp = sp; pthread_mutex_unlock(&me->mtx); continue; }
