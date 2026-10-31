@@ -42,6 +42,24 @@ static int opt_fb = 0;
 static int opt_umax = 0;
 static int opt_glbpre = -1; static long g_glbcalls = 0, g_glbfath = 0;
 static int opt_fixorder = 0;
+static int opt_symrow = 0;
+/* -brmap file: branching lines replayed from another solver's tree, lines "len kind id i:j ..." (kind 0 = row of A, 1 = column) */
+typedef struct { int len, kind, id, fi[8], fj[8]; } brmap_t;
+static brmap_t *g_brmap = NULL; static int g_nbrmap = 0;
+static void load_brmap(const char *fn) {
+    FILE *f = fopen(fn, "r"); if (!f) { perror(fn); exit(1); }
+    char line[1024]; int cap = 0;
+    while (fgets(line, sizeof line, f)) {
+        brmap_t e; int off = 0, k; if (sscanf(line, "%d %d %d%n", &e.len, &e.kind, &e.id, &off) != 3 || e.len > 8) continue;
+        char *p = line + off; for (k = 0; k < e.len; k++) { int n2 = 0; if (sscanf(p, " %d:%d%n", &e.fi[k], &e.fj[k], &n2) != 2) break; p += n2; }
+        if (k < e.len) continue;
+        if (g_nbrmap == cap) { cap = cap ? 2 * cap : 64; g_brmap = realloc(g_brmap, cap * sizeof *g_brmap); }
+        g_brmap[g_nbrmap++] = e;
+    }
+    fclose(f); fprintf(stderr, "brmap: %d entries from %s\n", g_nbrmap, fn);
+}
+static long g_brmap_hits = 0;
+static int opt_root_kind = -1, opt_root_id = -1;   /* -rootbr k id: branching line at the root (k 0 = row of A, 1 = column of B), for tree comparisons */
 static int opt_topd = -1; static double opt_topx = 1;   /* -topd d -topx x: x times more FW iterations down to depth d */
 static double opt_r2p = 0;   /* -r2p p: rule 2 weighs each surviving child by its relative gap to the power p (0: count, as in 2001) */
 static int opt_ext = 0, opt_extn = 1; static double opt_extd = 0; static __thread int tl_noext = 0;
@@ -1720,7 +1738,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
     static __thread unsigned char domc[NMAX][NMAX];
     if (opt_dombr) dominated_children(nd, ev, domc); else memset(domc, 0, sizeof domc);
     int allow_row = 1, allow_col = 1;
-    if (nA > 1 || nB > 1) { if (nB >= nA) allow_col = 0; else allow_row = 0; }
+    if ((nA > 1 || nB > 1) && !opt_symrow) { if (nB >= nA) allow_col = 0; else allow_row = 0; }   /* -symrow: lines of both kinds stay candidates under symmetry */
     int colpos[NMAX], rowpos[NMAX];
     for (int b = 0; b < m; b++) colpos[ev->L[b]] = b;
     for (int a = 0; a < m; a++) rowpos[ev->F[a]] = a;
@@ -1791,6 +1809,16 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         Rsz = *R; Rsz.rule = 3; Rsz.nbest = opt_lanb; Rsz.nfw3 = opt_lanfw; R = &Rsz;
     }
     double zpro[NMAX]; int have_pro = 0;
+    if (g_nbrmap && nd->depth <= 8) {
+        for (int e = 0; e < g_nbrmap; e++) { const brmap_t *q = &g_brmap[e]; if (q->len != nd->depth) continue;
+            int ok = 1; for (int k = 0; k < q->len && ok; k++) ok = nd->rc[q->fi[k]] == q->fj[k];
+            if (ok) { int line = -1;
+                if (q->kind == 0) { for (int a = 0; a < m; a++) if (ev->F[a] == q->id) line = a; }
+                else { for (int b = 0; b < m; b++) if (ev->L[b] == q->id) line = b; }
+                if (line >= 0) { best_kind = q->kind; best_line = line; brforced = 1; __atomic_fetch_add(&g_brmap_hits, 1, __ATOMIC_RELAXED); }
+                break; } }
+    }
+    if (opt_root_kind >= 0 && nd->depth == 0) { best_kind = opt_root_kind; best_line = opt_root_kind == 0 ? rowpos[opt_root_id] : colpos[opt_root_id]; brforced = 1; }
     if ((R->rule == 3 || R->rule == 4) && m > 2 && !opt_fixorder && !brforced) {
         typedef struct { int kind, line; double s; } cand_t;
         cand_t rows[NMAX], cols[NMAX], cands[2 * NMAX]; int nr = 0, ncl = 0, nc = 0;
@@ -1867,6 +1895,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
                 else score += (R->rule == 4) ? (m - 1) * fmin(zij, 1e15) + vij : fmin(zij, capped ? thr : 1e15);
             }
             if (aborted) continue;
+            if (nd->depth == 0 && getenv("LADBG")) { int id = cands[c].kind == 0 ? ev->F[cands[c].line] : ev->L[cands[c].line]; fprintf(stderr, "ladbg kind %d id %d score %.1f kids", cands[c].kind, id, score); for (int o = 0; o < m; o++) if (zline[o] < INFINITY) fprintf(stderr, " %.0f", zline[o]); fprintf(stderr, "\n"); }
             if (score > bestscore) { bestscore = score; bk = cands[c].kind; bl = cands[c].line; memcpy(zpro, zline, sizeof(double) * m); have_pro = 1; }
         }
         w->nlap += w2->nlap; w->nfw += w2->nfw;
@@ -2102,7 +2131,8 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     double t0 = now(); dnn_bound(&P, &o, &r); double dt = now() - t0;
     free(Z0);
     if (opt_dnn_kid && !r.fathomed) tl_kid_m = m;
-    if (getenv("DNN_LOG")) fprintf(stderr, "dnnlog depth %d m %d K %.1f bound %.3f cutoff %.1f iters %d fath %d gu %d warm %d t %.2f\n", depth, m, K, r.bound, o.cutoff, r.iters, r.fathomed, r.gaveup, Z0 != NULL, dt);
+    if (getenv("DNN_LOG")) { char fx[512]; int fl = 0; fx[0] = 0; for (int i = 0; i < N && fl < 480; i++) if (nd->rc[i] >= 0) fl += snprintf(fx + fl, sizeof fx - fl, " %d:%d", i, nd->rc[i]);
+        fprintf(stderr, "dnnlog depth %d m %d K %.1f bound %.3f cutoff %.1f iters %d fath %d gu %d warm %d t %.2f fix%s\n", depth, m, K, r.bound, o.cutoff, r.iters, r.fathomed, r.gaveup, Z0 != NULL, dt, fx); }
     if (keep && !r.fathomed) { ms->ok = 1; ms->m = m; memcpy(ms->F, ev->F, sizeof(int) * m); memcpy(ms->L, ev->L, sizeof(int) * m); memcpy(ms->rc, nd->rc, sizeof(int) * N); }
     __atomic_fetch_add(&g_dnn_calls[depth], 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_dnn_iters[depth], r.iters, __ATOMIC_RELAXED);
     if (r.fathomed) __atomic_fetch_add(&g_dnn_fath[depth], 1, __ATOMIC_RELAXED);
@@ -2602,6 +2632,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dualmin")) opt_dualmin = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-glbpre")) { opt_glbpre = atoi(argv[++a]); atexit(print_glb); }
         else if (!strcmp(argv[a], "-fixorder")) opt_fixorder = 1;
+        else if (!strcmp(argv[a], "-symrow")) opt_symrow = 1;
+        else if (!strcmp(argv[a], "-brmap") && a + 1 < argc) load_brmap(argv[++a]);
+        else if (!strcmp(argv[a], "-rootbr") && a + 2 < argc) { opt_root_kind = atoi(argv[++a]); opt_root_id = atoi(argv[++a]); }
         else if (!strcmp(argv[a], "-topd")) opt_topd = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-topx")) opt_topx = atof(argv[++a]);
         else if (!strcmp(argv[a], "-r2p")) opt_r2p = atof(argv[++a]);
