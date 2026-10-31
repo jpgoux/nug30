@@ -724,7 +724,7 @@ Résultat : optimum 6 124 prouvé en 5 550 nœuds, 9 311 s de mur (2 h 35), 37 2
 
 Lecture : même arbre à 5 % près ; l'écart de temps vient du coût par nœud (itération ADMM de 58 ms à m = 27 contre 43 ms). Prochaine étape : profiler l'itération et le certificat. Données : `/mnt/project-files/nug30/compute/dnn30/`.
 
-## 31 octobre 2026, après-midi : l'itération DNN et sa convergence (× 2,06 sur nug25, même arbre)
+## 31 octobre 2026, après-midi : l'itération DNN et sa convergence (× 2,06 sur nug25, même arbre ; nug30 1 h 30 → 44 min 39 s)
 
 Banc : nug25 avec le fichier de Nate (flux d'abord), 1 cœur, `-brtie -brdyn -ub 3744 -dnn 2 5 -dnngumin 300 -dnngeo -dnnit 4000 -dnnlap -strat D -brecc 4 6`, trois runs lancés ensemble pour une charge égale. Référence : 874 à 885 s, 739 nœuds, 731 appels DNN, 80 100 itérations, 11,0 ms par itération. Profil d'une itération à m = 22 (K = 442) : décomposition spectrale du sous-espace 57 % (filtre de Chebyshev 0,33 s, Cholesky-QR faite deux fois 0,35 s, produit W Q et H 0,20 s, valeurs propres de H 0,27 s sur 250 itérations), produits par la face 30 %, mise à jour de Y et Z et certificat 13 %. Sur nug30 (journal de la nuit) : 772 700 itérations, dont 26 % dans les 203 nœuds non élagués ; les nœuds élagués des niveaux 3 et 4 font 54 %.
 
@@ -768,7 +768,9 @@ Ligne du run d'1 h 30 (b95, commit 4dbaac3) : `par nug30.dat -strat D -brtie -br
 | `-dnnguzone 0.003` | un abandon à moins de 0,3 % du seuil doit être confirmé 100 itérations plus tard | D6 : 450 s contre 431 s (+4,4 %), un élagage gagné ; assurance contre les abandons prématurés |
 | `-dnnext 20` | sous un nœud abandonné au dernier niveau DNN, les enfants gardent la DNN (réchauffée) | D8 : sous-arbre de 342 000 nœuds QPB et 31 s → 24 nœuds et 18 s ; arbre lisible, temps inchangé |
 
-Ligne recommandée pour le prochain run complet (après accord) : `par nug30.dat -strat D -brtie -brecc 4 6 -brdyn -ub 6124 -threads 4 -dnn 2 7 -dnngumin 300 -dnngeo -dnnit 4000 -dnnlap -dnnshrink 8 -dnnqr1 -dnnacc 1.05 -dnnpad 8 -dnnsub 120 -dnnbetaf 0.7 -dnnguzone 0.003 -dnnext 20 -prog ... -ckpt ... -ckpt_s 60`. Ce qui n'a pas été mesuré : nug30 en entier avec ces options ; l'estimation à partir de nug25 (×1,9 à ×2,1 sur la partie DNN, qui faisait 21 600 s de CPU sur 21 700) donne environ 45 à 50 minutes sur 4 cœurs.
+Ligne recommandée pour le prochain run complet (après accord) : `par nug30.dat -strat D -brtie -brecc 4 6 -brdyn -ub 6124 -threads 4 -dnn 2 7 -dnngumin 300 -dnngeo -dnnit 4000 -dnnlap -dnnshrink 8 -dnnqr1 -dnnacc 1.05 -dnnpad 8 -dnnsub 120 -dnnbetaf 0.7 -dnnguzone 0.003 -dnnext 20 -prog ... -ckpt ... -ckpt_s 60`. Estimation faite avant le run, à partir de nug25 (×1,9 à ×2,1 sur la partie DNN, qui faisait 21 600 s de CPU sur 21 700) : 45 à 50 minutes sur 4 cœurs.
+
+**Mesure (run dnn32, 31 octobre 16 h 18 à 17 h 03 Paris, 4 cœurs, ligne ci-dessus) : nug30 prouvé en 2 679 s (44 min 39 s) contre 5 430 s, soit × 2,03 ; 5 570 nœuds (5 550 la nuit, 346 335 avec le sous-arbre QPB du run d'1 h 30) ; CPU de la borne DNN 10 588 s contre 21 600 s. Temps moyen par appel DNN, avant → après : niveau 2 9,6 → 6,9 s, niveau 3 4,1 → 2,2 s, niveau 4 3,3 → 1,65 s, niveau 5 2,2 → 1,08 s. Journaux : /mnt/project-files/nug30/compute/dnn32/. Marche 14 de l'escalier du site (v85).**
 
 ### Pistes fermées le même jour, avec la raison
 - Momentum « paresseux » (le point extrapolé est formé là où il est consommé au lieu d'une passe sur quatre matrices) : mêmes itérés, −1 % ; gardé par défaut (DNN_ACCLAZY=0 pour l'ancienne passe).
