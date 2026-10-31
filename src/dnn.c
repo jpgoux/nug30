@@ -23,7 +23,7 @@
 #include "dnn.h"
 #include <time.h>
 static double tnow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + 1e-9 * t.tv_nsec; }
-double g_dnn_prof[8];
+static double g_dnn_dy2 = 0; double g_dnn_prof[12], g_dnn_sub[6];
 long g_dnn_refine[3];   /* double-precision refinements: tried, improved, fathomed */
 
 void dsyevd_(const char *, const char *, const int *, double *, const int *, double *, double *, const int *, int *, const int *, int *);
@@ -223,11 +223,11 @@ static void hh_rows_cols(ws_t *w, double *M) {   /* M <- D M D, M N x N */
         }
     }
 }
-/* R = V' M V, M N x N symmetric, R K x K */
-static void face_in(ws_t *w, const double *M, double *R) {
+/* R = V' M V, M N x N symmetric, R K x K; the _inplace variant transforms the matrix already in w->t1 */
+static void face_in_inplace(ws_t *w, double *R) {
     int m = w->m, q = w->q, N = w->N, K = w->K, ll = 1 + (m - 1) * m + (m - 1);
     const double s2 = sqrt(0.5);
-    double *T = w->t1; memcpy(T, M, sizeof(double) * (long)N * N);
+    double *T = w->t1;
     hh_rows_cols(w, T);
     R[0] = 0.5 * (T[0] + T[ll] + T[(long)ll * N] + T[(long)ll * N + ll]);
     for (int a = 0; a < q; a++) for (int b = 0; b < q; b++) {
@@ -237,6 +237,7 @@ static void face_in(ws_t *w, const double *M, double *R) {
         for (int c = 0; c < q; c++) for (int d = 0; d < q; d++) rr[c * q + d] = tr[c * m + d];
     }
 }
+static void face_in(ws_t *w, const double *M, double *R) { memcpy(w->t1, M, sizeof(double) * (long)w->N * w->N); face_in_inplace(w, R); }
 /* Y = V R V', R K x K symmetric, Y N x N */
 static void face_out(ws_t *w, const double *R, double *Yo) {
     int m = w->m, q = w->q, N = w->N, K = w->K, ll = 1 + (m - 1) * m + (m - 1);
@@ -323,10 +324,28 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     sumabs /= sc;
     double cut = (o->cutoff - P->s) / sc;     /* fathom when GL - margin exceeds cut */
     double beta = o->beta > 0 ? o->beta : 0.1 * m, gstep = o->gamma > 0 ? o->gamma : 1.618;
+    if (getenv("DNN_BETAF")) beta *= atof(getenv("DNN_BETAF"));   /* experiments: beta factor, over-relaxation step */
+    if (getenv("DNN_GAMMA")) gstep = atof(getenv("DNN_GAMMA"));
     /* state */
     double *Y = calloc(NN, sizeof(double)), *Z = calloc(NN, sizeof(double)), *VRV = calloc(NN, sizeof(double));
     double *Mz = calloc(NN, sizeof(double)), *R = calloc(KK, sizeof(double)), *S = calloc(KK, sizeof(double));
     double *scr = malloc(sizeof(double) * KK);
+    double *Zc = malloc(sizeof(double) * NN);   /* Z' = Z + beta (Y - V R V') of the certificate */
+    /* DNN_ACC=1: fast ADMM of Goldstein, O'Donoghue, Setzer and Baraniuk (2014), Nesterov momentum on (Y, Z) with restart
+     * when the combined residual grows (eta, DNN_ETA, default 0.999); the arrays Y and Z then hold the accelerated points */
+    int acc = getenv("DNN_ACC") ? atoi(getenv("DNN_ACC")) : o->acc; double acc_eta = getenv("DNN_ETA") ? atof(getenv("DNN_ETA")) : (o->acc_eta > 0 ? o->acc_eta : 1.02), acc_a = 1, acc_c = INFINITY; long acc_restarts = 0; int acc_mode = getenv("DNN_ACCMODE") ? atoi(getenv("DNN_ACCMODE")) : 1; double acc_omax = getenv("DNN_OMAX") ? atof(getenv("DNN_OMAX")) : 1.0;
+    int acc_second = getenv("DNN_ACCSECOND") ? atoi(getenv("DNN_ACCSECOND")) : 1; double acc_gap = (getenv("DNN_ACCGAP") ? atof(getenv("DNN_ACCGAP")) : 1e-3) * fmax(1.0, fabs(o->cutoff)) / sc; long acc_secondused = 0;
+    int acc_cert = getenv("DNN_ACCCERT") ? atoi(getenv("DNN_ACCCERT")) : (o->acc_cert >= 0 ? 1 : 0); double acc_decay = getenv("DNN_ACCDECAY") ? atof(getenv("DNN_ACCDECAY")) : (o->acc_decay > 0 ? o->acc_decay : 0.5); long acc_certdrops = 0;
+    double *Yp = acc ? malloc(sizeof(double) * NN) : NULL, *Zp = acc ? malloc(sizeof(double) * NN) : NULL;
+    /* lazy momentum (default): Y, Z hold the last true iterates, Yp, Zp the ones before, and the extrapolated point
+     * Y + acc_om (Y - Yp) is formed where it is consumed (face transform, certificate, Y/Z update), which saves a
+     * sweep over four matrices per iteration; algebraically the same iterates as the explicit pass */
+    int acc_lazy = getenv("DNN_ACCLAZY") ? atoi(getenv("DNN_ACCLAZY")) : 1; double acc_om = 0;
+    int dyfix = getenv("DNN_DYFIX") ? atoi(getenv("DNN_DYFIX")) : 0;
+    /* give-up confirmation: when the geometric rule fires while the bound is within gu_zone of the cutoff (relative),
+     * the node runs gu_delay more iterations and the rule must fire again (the two windows then lie in the smoother tail);
+     * the fathoms lost by faster variants were all nodes given up in this zone around iteration 300 */
+    double gu_zone = getenv("DNN_GUZONE") ? atof(getenv("DNN_GUZONE")) : o->gu_zone; int gu_delay = getenv("DNN_GUDELAY") ? atoi(getenv("DNN_GUDELAY")) : (o->gu_delay > 0 ? o->gu_delay : 100), gu_first = -1; long gu_delayed = 0;
     if (o->Z0) for (long t = 0; t < NN; t++) Z[t] = o->Z0[t] / sc;   /* warm start, given in unscaled units */
     /* start: y = (1, x = 1/m), Y = y y' with gangster entries zero */
     for (int a = 0; a < N; a++) for (int b = 0; b < N; b++) {
@@ -337,12 +356,16 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     int it, every = o->cert_every > 0 ? o->cert_every : 10, maxit = o->maxit > 0 ? o->maxit : 1000;
     double cgl[DNN_MMAX * DNN_MMAX], cbest[DNN_MMAX * DNN_MMAX], rest = 0;   /* outer LAP costs of the best certificate, and its other terms */
     double best = -INFINITY, hist[64]; for (int k = 0; k < 64; k++) hist[k] = -INFINITY;
-    int sub_p = 0, sub_redo = 0, sub_nf = getenv("DNN_NF") ? atoi(getenv("DNN_NF")) : 2; double sub_sig = 0, sub_a = 0;
+    int sub_p = 0, sub_pad = 0, sub_qr1 = getenv("DNN_QR1") ? atoi(getenv("DNN_QR1")) : o->qr1, sub_shrink = getenv("DNN_SHRINK") ? atoi(getenv("DNN_SHRINK")) : o->shrink, sub_redo = 0, sub_nf = getenv("DNN_NF") ? atoi(getenv("DNN_NF")) : 2; double sub_sig = 0, sub_a = 0;
     float *sH0 = o->sub ? malloc(sizeof(float) * KK) : NULL, *sQ = o->sub ? malloc(sizeof(float) * KK) : NULL, *sG = o->sub ? malloc(sizeof(float) * KK) : NULL, *sH = o->sub ? malloc(sizeof(float) * KK) : NULL, *sth = o->sub ? malloc(sizeof(float) * K) : NULL;
     for (it = 1; it <= maxit; it++) {
-        /* W = V'(Y + Z/beta)V */
-        for (long t = 0; t < NN; t++) Mz[t] = Y[t] + Z[t] / beta;
-        double tp0 = tnow(); w->fl = o->single; face_in(w, Mz, w->W); double tp1 = tnow(); g_dnn_prof[0] += tp1 - tp0;
+        /* W = V'(Y + Z/beta)V, the sum formed directly in the transform's work matrix (one sweep less) */
+        double tp0 = tnow(); w->fl = o->single;
+        { double *T = w->t1, ib = 1.0 / beta;
+          if (acc && acc_lazy && acc_om != 0) { double o1 = 1 + acc_om, om = acc_om; for (long t = 0; t < NN; t++) T[t] = o1 * (Y[t] + Z[t] * ib) - om * (Yp[t] + Zp[t] * ib); }
+          else for (long t = 0; t < NN; t++) T[t] = Y[t] + Z[t] * ib;
+          face_in_inplace(w, w->W); }
+        double tp1 = tnow(); g_dnn_prof[0] += tp1 - tp0;
         /* eigendecomposition of W */
         int info = 0, nneg = 0;
         int full = !o->sub || it == 1 || sub_p == 0 || (it - 1) % o->sub == 0 || sub_redo;
@@ -362,13 +385,13 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             while (nneg < K && w->eval[nneg] < 0) nneg++;
             for (int k = 0; k < nneg; k++) { double f = sqrt(-w->eval[k]); for (int t = 0; t < K; t++) scr[(long)k * K + t] = w->evec[(long)k * K + t] * f; }
             if (o->sub) {   /* subspace for the next iterations: the nneg + pad lowest eigenvectors */
-                sub_p = nneg + (getenv("DNN_PAD") ? atoi(getenv("DNN_PAD")) : (K / 20 > 8 ? K / 20 : 8)); if (sub_p > K) sub_p = K;
+                sub_pad = getenv("DNN_PAD") ? atoi(getenv("DNN_PAD")) : (o->pad > 0 ? o->pad : (K / 20 > 8 ? K / 20 : 8)); sub_p = nneg + sub_pad; if (sub_p > K) sub_p = K;
                 for (int t = 0; t < K; t++) for (int k = 0; k < sub_p; k++) sQ[(long)t * sub_p + k] = (float)w->evec[(long)k * K + t];
                 sub_sig = 1.05 * fabs(w->eval[K - 1]) + 1e-3; sub_a = w->eval[sub_p - 1]; if (sub_a < 0) sub_a = 0; sub_redo = 0;
             }
         } else {
             /* one filtered subspace step and Rayleigh-Ritz: X = (sig I - W) Q, Q = orth(X), H = Q' W Q */
-            int pp = sub_p;
+            int pp = sub_p; double ts0 = tnow();
             /* Chebyshev filter of degree sub_nf damping [sub_a, sub_sig] (Zhou and Saad 2007) */
             {
                 double e = 0.5 * (sub_sig - sub_a), c = 0.5 * (sub_sig + sub_a); if (e <= 0) e = 1e-6;
@@ -386,29 +409,39 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
                 }
                 if (Y1 != sG) memcpy(sG, Y1, sizeof(float) * K * pp);
             }
+            double ts1 = tnow(); g_dnn_sub[0] += ts1 - ts0;
             /* Cholesky QR, twice */
             int ok = 1;
-            for (int pass = 0; pass < 2 && ok; pass++) {
+            for (int pass = 0; pass < (sub_qr1 ? 1 : 2) && ok; pass++) {
                 cblas_ssyrk(CblasRowMajor, CblasUpper, CblasTrans, pp, K, 1.0f, sG, pp, 0.0f, sH, pp);
                 int inf; spotrf_("L", &pp, sH, &pp, &inf);   /* row-major upper = column-major lower */
                 if (inf) { ok = 0; break; }
                 cblas_strsm(CblasRowMajor, CblasRight, CblasUpper, CblasNoTrans, CblasNonUnit, K, pp, 1.0f, sH, pp, sG, pp);
             }
-            if (!ok) { sub_redo = 1; it--; continue; }
+            if (!ok) { sub_redo = 1; it--; g_dnn_prof[10] += 1; continue; }
+            double ts2 = tnow(); g_dnn_sub[1] += ts2 - ts1;
             memcpy(sQ, sG, sizeof(float) * K * pp);
             cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, K, pp, K, 1.0f, w->Wf, K, sQ, pp, 0.0f, sG, pp);
             cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans, pp, pp, K, 1.0f, sQ, pp, sG, pp, 0.0f, sH, pp);
+            double ts3 = tnow(); g_dnn_sub[2] += ts3 - ts2;
             ssyevd_("V", "L", &pp, sH, &pp, sth, w->workf, &w->lworkf, w->iwork, &w->liwork, &info);
             if (info) { sub_redo = 1; it--; continue; }
+            double ts4 = tnow(); g_dnn_sub[3] += ts4 - ts3;
             /* Ritz vectors: sG = sQ * U, U rows = eigenvectors of H */
             cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, K, pp, pp, 1.0f, sQ, pp, sH, pp, 0.0f, sG, pp);
             memcpy(sQ, sG, sizeof(float) * K * pp);
             while (nneg < pp && sth[nneg] < 0) nneg++;
             sub_a = sth[pp - 1] > 0 ? sth[pp - 1] : 0;
             for (int k = 0; k < nneg; k++) { double f = sqrt(-(double)sth[k]); for (int t = 0; t < K; t++) scr[(long)k * K + t] = sQ[(long)t * pp + k] * f; }
-            if (nneg > pp - 4) sub_redo = 1;   /* the negative space outgrew the subspace */
+            if (nneg > pp - 4) { sub_redo = 1; g_dnn_prof[11] += 1; }   /* the negative space outgrew the subspace */
+            else if (sub_shrink && nneg + sub_pad + sub_shrink <= pp) {   /* DNN_SHRINK=k: drop the highest Ritz pairs when the subspace exceeds nneg + pad by k */
+                int pn = nneg + sub_pad;
+                for (int t = 0; t < K; t++) for (int k = 0; k < pn; k++) sQ[(long)t * pn + k] = sQ[(long)t * pp + k];
+                sub_a = sth[pn - 1] > 0 ? sth[pn - 1] : 0; sub_p = pn; pp = pn;
+            }
+            g_dnn_sub[4] += tnow() - ts4;
         }
-        double tp2 = tnow(); g_dnn_prof[1] += tp2 - tp1;
+        double tp2 = tnow(); g_dnn_prof[1] += tp2 - tp1; g_dnn_prof[7] += o->sub && !full ? sub_p : K; g_dnn_prof[8] += nneg; g_dnn_prof[9] += 1;
         /* R = W - negative part = W + scr' scr (any R keeps the certificate valid: S is recomputed and checked) */
         memcpy(R, w->W, sizeof(double) * KK);
         if (nneg > 0) {
@@ -422,16 +455,15 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
         double tp5 = tnow();
         if (cert) {
             /* Z' = Z + beta (Y - V R V'), M = L + Z' */
-            for (long t = 0; t < NN; t++) Mz[t] = L[t] + Z[t] + beta * (Y[t] - VRV[t]);
+            if (acc && acc_lazy && acc_om != 0) { double o1 = 1 + acc_om, om = acc_om; for (long t = 0; t < NN; t++) { double zh = o1 * Z[t] - om * Zp[t], yh = o1 * Y[t] - om * Yp[t]; Mz[t] = L[t] + zh + beta * (yh - VRV[t]); } }
+            else for (long t = 0; t < NN; t++) Mz[t] = L[t] + Z[t] + beta * (Y[t] - VRV[t]);
             /* symmetrize exactly */
             for (int a = 0; a < N; a++) for (int b = a + 1; b < N; b++) { double x = 0.5 * (Mz[(long)a * N + b] + Mz[(long)b * N + a]); Mz[(long)a * N + b] = Mz[(long)b * N + a] = x; }
             /* S = V' Z' V computed from Z' = M - L */
-            double *Zp = w->t1 == NULL ? NULL : NULL; (void)Zp;
-            double *Zc = malloc(sizeof(double) * NN); double zf = 0, m1 = 0;
+            double zf = 0, m1 = 0;
             for (long t = 0; t < NN; t++) { Zc[t] = Mz[t] - L[t]; zf += Zc[t] * Zc[t]; m1 += fabs(Mz[t]); }
             zf = sqrt(zf);
             w->fl = 0; face_in(w, Zc, S);
-            free(Zc);
             double lmx = 0; for (int k = 0; k < K; k++) { /* crude guess from the diagonal */ if (S[(long)k * K + k] > lmx) lmx = S[(long)k * K + k]; }
             double lam = rump_lmax(K, S, fmax(lmx, 1e-14 * (zf + 1)), scr);
             /* the face basis is applied in floating point: allowance 64 m u ||Z'||_F (report, 2.3 (i)) */
@@ -471,8 +503,14 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
                     free(Pp); free(VPV); free(M2); free(Z2); free(S2);
                 }
             }
+            if (acc && acc_cert && isfinite(best) && bnd < best - 1e-9) {   /* certificate fell below the best: drop the momentum (function-value restart), damp it for the rest */
+                acc_a = 1; acc_c = INFINITY; acc_omax *= acc_decay; acc_certdrops++;
+                if (acc_lazy) acc_om = 0;   /* back to the last true iterate */
+                else if (Yp) { memcpy(Y, Yp, sizeof(double) * NN); memcpy(Z, Zp, sizeof(double) * NN); }
+            }
             if (isfinite(bnd) && bnd > best) { best = bnd; if (o->kid) { memcpy(cbest, cgl, sizeof(double) * m * m); rest = bnd - (gl - Mz[0]); } }
-            if (o->verbose) fprintf(stderr, "dnn it %4d  cert %.6f (unscaled %.3f)  lam %.2e  nneg %d\n", it, bnd, P->s + bnd * sc, lam, nneg);
+            if (o->verbose) { double pr = 0; for (long t = 0; t < NN; t++) { double d = Y[t] - VRV[t]; pr += d * d; }
+                fprintf(stderr, "dnn it %4d  cert %.6f (unscaled %.3f)  lam %.2e  nneg %d  primal %.3e  dual %.3e  om %.3f\n", it, bnd, P->s + bnd * sc, lam, nneg, sqrt(pr), beta * sqrt(g_dnn_dy2), acc_om); }
             if (best > cut) { it++; break; }
             /* give-up rule: stop when even a generous linear extrapolation of the last 50 iterations
              * (o->giveup times their gain) stays below the cutoff; this only saves time */
@@ -484,7 +522,16 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
                     if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(h2)) {
                         double d1 = h0 - h1, d2 = h1 - h2;
                         double r = d2 > 0 ? fmin(d1 / d2, 0.95) : (d1 > 0 ? 0.95 : 0.0);
-                        if (best + o->giveup * d1 * r / (1 - r) < cut) { it++; res->gaveup = 1; break; }
+                        if (best + o->giveup * d1 * r / (1 - r) < cut) {
+                            if (gu_zone > 0 && cut - best < gu_zone * fmax(1.0, fabs(o->cutoff)) / sc && (gu_first < 0 || it < gu_first + gu_delay)) {
+                                if (gu_first < 0) { gu_first = it; gu_delayed++; }   /* in the zone: confirm later */
+                            } else if (acc && acc_second && cut - best < acc_gap) {   /* second chance near the cutoff: plain ADMM from here, fresh give-up history */
+                                acc = 0; acc_second = 0; acc_a = 1; acc_secondused++;
+                                if (acc_lazy) acc_om = 0;
+                                else if (Yp) { memcpy(Y, Yp, sizeof(double) * NN); memcpy(Z, Zp, sizeof(double) * NN); }
+                                for (int k = 0; k < 64; k++) hist[k] = -INFINITY; hist[slot] = best;
+                            } else { it++; res->gaveup = 1; break; }
+                        }
                     }
                 } else if (it >= (o->giveup_min > 0 ? o->giveup_min : 100) && isfinite(hist[(slot - back + 64) % 64])) {
                     double g = best - hist[(slot - back + 64) % 64];
@@ -498,18 +545,55 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
          * same facility i or same location j, except (ij) itself */
         {
             const double ib = 1.0 / beta, gb = gstep * beta;
+            double dy2 = 0, dz2 = 0;   /* ||Y_k - Yhat||^2 and ||Z_k - Zhat||^2 for the restart test */
             for (int a = 0; a < N; a++) {
                 double *yr = Y + (long)a * N, *zr = Z + (long)a * N; const double *lr = L + (long)a * N, *vr = VRV + (long)a * N;
-                for (int b = 0; b < N; b++) { double x = vr[b] - (lr[b] + zr[b]) * ib; yr[b] = x < 0 ? 0 : (x > 1 ? 1 : x); }
-                if (a == 0) yr[0] = 1;
+                if (acc && acc_lazy) {   /* extrapolated point formed here; Yp, Zp take the true iterates being replaced */
+                    double *ypr = Yp + (long)a * N, *zpr = Zp + (long)a * N, om = acc_om;
+                    for (int b = 0; b < N; b++) {
+                        double y0 = yr[b], z0 = zr[b], yh = y0 + om * (y0 - ypr[b]), zh = z0 + om * (z0 - zpr[b]);
+                        double x = vr[b] - (lr[b] + zh) * ib; x = x < 0 ? 0 : (x > 1 ? 1 : x); double d = x - yh; dy2 += d * d;
+                        yr[b] = x; zr[b] = zh; ypr[b] = y0; zpr[b] = z0;
+                    }
+                }
+                else if (acc) for (int b = 0; b < N; b++) { double x = vr[b] - (lr[b] + zr[b]) * ib; x = x < 0 ? 0 : (x > 1 ? 1 : x); double d = x - yr[b]; dy2 += d * d; yr[b] = x; }
+                else for (int b = 0; b < N; b++) { double x = vr[b] - (lr[b] + zr[b]) * ib; yr[b] = x < 0 ? 0 : (x > 1 ? 1 : x); }
+                if (a == 0) { if (dyfix) { double d = yr[0] - 1; dy2 -= d * d; } yr[0] = 1; }
                 else { int i = (a - 1) / m, j = (a - 1) % m;
+                    /* the gangster entries are fixed at 0 (so were their previous values): their clipped values are
+                     * not part of the residual (dyfix); without it the restart test is dominated by a constant term */
+                    if (dyfix) { for (int l = 0; l < m; l++) if (l != j) { double d = yr[1 + i * m + l]; dy2 -= d * d; }
+                                 for (int k = 0; k < m; k++) if (k != i) { double d = yr[1 + k * m + j]; dy2 -= d * d; } }
                     for (int l = 0; l < m; l++) if (l != j) yr[1 + i * m + l] = 0;
                     for (int k = 0; k < m; k++) if (k != i) yr[1 + k * m + j] = 0; }
-                for (int b = 0; b < N; b++) zr[b] += gb * (yr[b] - vr[b]);
+                if (acc) for (int b = 0; b < N; b++) { double d = gb * (yr[b] - vr[b]); dz2 += d * d; zr[b] += d; }
+                else for (int b = 0; b < N; b++) zr[b] += gb * (yr[b] - vr[b]);
+            }
+            g_dnn_dy2 = dy2;
+            if (acc && acc_lazy) {
+                double c = dz2 / beta + beta * dy2;
+                if (it == 1) { acc_c = c; acc_a = 1; acc_om = 0; }
+                else if (c < acc_eta * acc_c) {
+                    double an = 0.5 * (1 + sqrt(1 + 4 * acc_a * acc_a)), om = (acc_a - 1) / an; acc_a = an; acc_c = c;
+                    acc_om = om > acc_omax ? acc_omax : om;
+                } else { acc_a = 1; acc_c = c; acc_om = 0; acc_restarts++; }   /* restart: drop the momentum, keep the current point */
+            } else if (acc) {
+                double c = dz2 / beta + beta * dy2;
+                if (it == 1) { memcpy(Yp, Y, sizeof(double) * NN); memcpy(Zp, Z, sizeof(double) * NN); acc_c = c; acc_a = 1; }
+                else if (c < acc_eta * acc_c) {
+                    double an = 0.5 * (1 + sqrt(1 + 4 * acc_a * acc_a)), om = (acc_a - 1) / an; acc_a = an; acc_c = c;
+                    if (om > acc_omax) om = acc_omax;
+                    for (long t = 0; t < NN; t++) { double yk = Y[t], zk = Z[t]; Y[t] = yk + om * (yk - Yp[t]); Z[t] = zk + om * (zk - Zp[t]); Yp[t] = yk; Zp[t] = zk; }
+                } else if (acc_mode == 1) {   /* restart: drop the momentum, keep the current point */
+                    memcpy(Yp, Y, sizeof(double) * NN); memcpy(Zp, Z, sizeof(double) * NN); acc_a = 1; acc_c = c; acc_restarts++;
+                } else {   /* restart from the previous point without momentum (Goldstein et al.) */
+                    memcpy(Y, Yp, sizeof(double) * NN); memcpy(Z, Zp, sizeof(double) * NN); acc_a = 1; acc_c = acc_c / acc_eta; acc_restarts++;
+                }
             }
         }
         g_dnn_prof[5] += tnow() - tp6;
     }
+    if (o->verbose) fprintf(stderr, "dnn acc: %ld restarts, %ld certificate drops, %ld second chance, final cap %.3f, give-up delayed %ld\n", acc_restarts, acc_certdrops, acc_secondused, acc_omax, gu_delayed);
     res->iters = it - 1;
     res->bound = best > -INFINITY ? P->s + best * sc : -INFINITY;
     /* rounding of the final rescale: subtract a relative allowance */
@@ -531,6 +615,9 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     }
     if (o->Zout) for (long t = 0; t < NN; t++) o->Zout[t] = Z[t] * sc;
     free(sH0); free(sQ); free(sG); free(sH); free(sth);
+    if ((acc || acc_secondused) && getenv("DNN_V")) fprintf(stderr, "acc: %ld restarts, %ld certificate drops, final omax %.3f, second chance %ld\n", acc_restarts, acc_certdrops, acc_omax, acc_secondused);
+    free(Yp); free(Zp);
+    free(Zc);
     free(L); free(Y); free(Z); free(VRV); free(Mz); free(R); free(S); free(scr);
     ws_free(w);
     return res->bound;

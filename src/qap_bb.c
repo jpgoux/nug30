@@ -1197,6 +1197,7 @@ typedef struct {
     int cr[NMAX];   /* column -> row, -1 if free */
     int depth;
     unsigned fb[NMAX];   /* forbidden pairs (-fb): bit j of fb[i] set if row i cannot take column j in this subtree */
+    int dnn_ext;         /* 1: the parent was evaluated by the DNN bound and not fathomed (-dnnext: the DNN then continues below its last depth) */
 } node_t;
 
 typedef struct {
@@ -1216,6 +1217,7 @@ static _Atomic long g_nodes_all = 0;
 static long g_depth_all[NMAX + 1];
 /* per-depth counters for the progress file: pruned by QPB, DNN calls, pruned by DNN, DNN given up */
 static long g_qpbf[NMAX + 1], g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_gu[NMAX + 1];
+static int opt_dnn_kid = 0;
 static __thread double tl_kid[NMAX * NMAX]; static __thread int tl_kid_m;   /* child bounds of the last DNN call of this thread (-dnnkid) */
 static long g_dnn_kidcut[NMAX + 1];   /* children removed by them and not by QPB */
 /* serial search position, for live monitoring: at depth d the search is in child
@@ -1724,9 +1726,11 @@ static void sharpen_U(work_t *w, int m) {
 static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who) {
     if (opt_sens) sharpen_U(w, ev->m);
     int m = ev->m; double z = ev->z, thr = prune_thr(g_ub);
+    int kidelim = 0;   /* -dnnkid2: the DNN child bounds only remove children of the chosen line, the choice itself is unchanged */
     if (tl_kid_m == m) {   /* -dnnkid: z + U[a][b] and the DNN child bound are both valid for child (a, b) */
-        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double d = tl_kid[a * m + b] - z;
+        if (opt_dnn_kid == 1) for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double d = tl_kid[a * m + b] - z;
             if (d > w->U[a][b]) { if (z + w->U[a][b] <= thr && d + z > thr) __atomic_fetch_add(&g_dnn_kidcut[nd->depth], 1, __ATOMIC_RELAXED); w->U[a][b] = d; } }
+        else kidelim = 1;
         tl_kid_m = 0;
     }
     static __thread int idxA[GMAX], idxB[GMAX];
@@ -1908,6 +1912,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         double lb = z + Ueff[a][b];
         if (have_pro && zpro[o] > lb) lb = zpro[o];
         if (lb > thr) continue;
+        if (kidelim && tl_kid[a * m + b] > thr) { __atomic_fetch_add(&g_dnn_kidcut[nd->depth], 1, __ATOMIC_RELAXED); continue; }
         if (domc[a][b]) { __atomic_fetch_add(&g_dom_pruned, 1, __ATOMIC_RELAXED); continue; }
         ch[nch++] = (child_t){ev->F[a], ev->L[b], lb};
     }
@@ -1959,7 +1964,7 @@ static void read_resume(const char *fn) {
         node_t *x = &g_rlist[g_rn++];
         for (int i = 0; i < N; i++) x->rc[i] = x->cr[i] = -1, x->fb[i] = 0;
         for (int t = 0; t < k; t++) { int i, j; if (fscanf(f, "%d %d", &i, &j) != 2) exit(5); x->rc[i] = j; x->cr[j] = i; }
-        x->depth = k;
+        x->depth = k; x->dnn_ext = 1;   /* a resumed node below the DNN depths: its ancestry is unknown, let the DNN try once */
     }
     fclose(f);
     fprintf(stderr, "resume: %d open nodes, %ld nodes already done, ub %.0f\n", g_rn, nodes, ub);
@@ -2083,50 +2088,75 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
-static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_kid = 0, opt_dnn_refine = 0, opt_dnn_lap = 0, opt_dnn_fold = 0;
+static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_ext = 0; static __thread int tl_dnn_nf = 0; static double opt_dnn_guzone = 0; static int opt_dnn_gudelay = 100; static double opt_dnn_betaf = 1; static int opt_dnn_geo = 0, opt_dnn_refine = 0, opt_dnn_lap = 0, opt_dnn_fold = 0;
+static int opt_dnn_shrink = 0, opt_dnn_qr1 = 0, opt_dnn_pad = 0, opt_dnn_acc = 0, opt_dnn_acccert = 0; static double opt_dnn_acceta = 0, opt_dnn_accdecay = 0;
 static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_iters[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
 static int opt_dnn_warm = 1;
 typedef struct { int ok, m, F[NMAX], L[NMAX], rc[NMAX]; double *Z; } dnnslot_t;
 static __thread dnnslot_t tl_dz[NMAX + 1];
+static dnnslot_t g_dnn_root;   /* -dnnroot it: multiplier of a DNN run at the root, warm start of the nodes above the first DNN depth */
+static int opt_dnn_root = 0; static long g_dnn_warm_anc = 0;
+/* root call: no give-up, opt_dnn_root iterations (or a fathom, which would solve the instance) */
+static void dnn_root_call(void) {
+    if (opt_dnn_root <= 0 || N > DNN_MMAX) return;
+    double *a = malloc(sizeof(double) * N * N), *b = malloc(sizeof(double) * N * N), *c = malloc(sizeof(double) * N * N);
+    for (int i = 0; i < N; i++) for (int j = 0; j < N; j++) { a[i * N + j] = A[i][j]; b[i * N + j] = B[i][j]; c[i * N + j] = C0[i][j]; }
+    dnn_prob_t P = {N, a, b, c, 0}; dnn_opt_t o = {0}; dnn_res_t r;
+    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_root; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = 0; o.lap_auto = opt_dnn_lap;
+    o.shrink = opt_dnn_shrink; o.qr1 = opt_dnn_qr1; o.pad = opt_dnn_pad; o.acc = opt_dnn_acc; o.acc_eta = opt_dnn_acceta; o.acc_cert = opt_dnn_acccert; o.acc_decay = opt_dnn_accdecay;
+    g_dnn_root.Z = malloc(sizeof(double) * (long)(N * N + 1) * (N * N + 1)); o.Zout = g_dnn_root.Z;
+    double t0 = now(); dnn_bound(&P, &o, &r);
+    g_dnn_root.ok = 1; g_dnn_root.m = N; for (int i = 0; i < N; i++) { g_dnn_root.F[i] = i; g_dnn_root.L[i] = i; g_dnn_root.rc[i] = -1; }
+    fprintf(stderr, "dnn root: bound %.3f after %d iterations, %.1f s\n", r.bound, r.iters, now() - t0);
+    free(a); free(b); free(c);
+}
 static long g_dnn_warm = 0;
 static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NMAX][NMAX], const double Br[NMAX][NMAX], const double Cr[NMAX][NMAX], double K) {
     int depth = nd->depth;
     tl_kid_m = 0;
-    if (opt_dnn_lo < 0 || depth < opt_dnn_lo || depth > opt_dnn_hi || m < opt_dnn_mmin) return 0;
+    tl_dnn_nf = 0;
+    /* -dnnext k: below the last DNN depth, a node keeps the DNN bound when its parent had it and was not fathomed, down to
+     * hi + k; without it, the subtree of one given-up node at the last depth is searched with the QPB bound alone
+     * (nug30, 31 Oct.: one such node of depth 7 produced 345 000 QPB nodes at depths 8 to 26) */
+    int ext = depth > opt_dnn_hi && opt_dnn_ext > 0 && nd->dnn_ext && depth <= opt_dnn_hi + opt_dnn_ext;
+    if (opt_dnn_lo < 0 || depth < opt_dnn_lo || (depth > opt_dnn_hi && !ext) || m < opt_dnn_mmin) return 0;
     double A[DNN_MMAX * DNN_MMAX], B[DNN_MMAX * DNN_MMAX], C[DNN_MMAX * DNN_MMAX];
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { A[a * m + b] = Ar[a][b]; B[a * m + b] = Br[a][b]; C[a * m + b] = Cr[a][b]; }
     dnn_prob_t P = {m, A, B, C, K}; dnn_opt_t o = {0}; dnn_res_t r;
-    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin; o.geo = opt_dnn_geo; o.refine = opt_dnn_refine; o.lap_auto = opt_dnn_lap;
+    o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin; o.gu_zone = opt_dnn_guzone; o.gu_delay = opt_dnn_gudelay; o.beta = opt_dnn_betaf != 1 ? opt_dnn_betaf * 0.1 * m : 0; o.geo = opt_dnn_geo; o.refine = opt_dnn_refine; o.lap_auto = opt_dnn_lap;
+    o.shrink = opt_dnn_shrink; o.qr1 = opt_dnn_qr1; o.pad = opt_dnn_pad; o.acc = opt_dnn_acc; o.acc_eta = opt_dnn_acceta; o.acc_cert = opt_dnn_acccert; o.acc_decay = opt_dnn_accdecay;
     if (opt_dnn_kid) o.kid = tl_kid;
     int N2 = m * m + 1; double *Z0 = NULL;
-    dnnslot_t *ps = depth > 0 ? &tl_dz[depth - 1] : NULL;
-    if (opt_dnn_warm && ps && ps->ok && ps->m == m + 1) {   /* is this node a child of the stored one? */
+    /* warm start from the nearest stored ancestor: the parent's slot, else a higher slot whose fixings are a subset of
+     * this node's (the root's multiplier when -dnnroot was given); its rows and columns of the extra fixings are removed */
+    for (int d = depth - 1; d >= 0 && opt_dnn_warm && !Z0; d--) {
+        dnnslot_t *ps = (d == 0 && g_dnn_root.ok) ? &g_dnn_root : &tl_dz[d];
+        if (!ps->ok || ps->m != m + (depth - d)) continue;
         int extra = 0, fa = -1, fl = -1, same = 1;
         for (int i = 0; i < N && same; i++) {
             if (ps->rc[i] >= 0) { if (nd->rc[i] != ps->rc[i]) same = 0; }
             else if (nd->rc[i] >= 0) { extra++; fa = i; fl = nd->rc[i]; }
         }
-        if (same && extra == 1) {
-            int a = -1, b = -1, mp = m + 1, Np = mp * mp + 1;
-            for (int x = 0; x < mp; x++) { if (ps->F[x] == fa) a = x; if (ps->L[x] == fl) b = x; }
-            if (a >= 0 && b >= 0) {
-                int map[DNN_MMAX * DNN_MMAX + 1]; map[0] = 0; int q = 1;
-                for (int i = 0; i < mp; i++) for (int j = 0; j < mp; j++) if (i != a && j != b) map[q++] = 1 + i * mp + j;
-                Z0 = malloc(sizeof(double) * N2 * N2);
-                for (int x = 0; x < N2; x++) { const double *src = ps->Z + (long)map[x] * Np; double *dst = Z0 + (long)x * N2; for (int y = 0; y < N2; y++) dst[y] = src[map[y]]; }
-                if (opt_dnn_fold) {   /* the fixed variable r = (a, b) equals y_0 in the child: fold its row into the border (Brixius) */
-                    int r = 1 + a * mp + b; const double *zr = ps->Z + (long)r * Np;
-                    for (int x = 1; x < N2; x++) { Z0[x] += zr[map[x]]; Z0[(long)x * N2] += zr[map[x]]; }
-                    Z0[0] += 2 * ps->Z[r] + zr[r];
-                }
-                o.Z0 = Z0; __atomic_fetch_add(&g_dnn_warm, 1, __ATOMIC_RELAXED);
-            }
+        if (!same || extra != depth - d) continue;
+        int mp = ps->m, Np = mp * mp + 1, posF[NMAX], posL[NMAX];
+        for (int i = 0; i < N; i++) posF[i] = posL[i] = -1;
+        for (int x = 0; x < mp; x++) { posF[ps->F[x]] = x; posL[ps->L[x]] = x; }
+        int map[DNN_MMAX * DNN_MMAX + 1], okm = 1; map[0] = 0;
+        for (int i = 0; i < m && okm; i++) for (int j = 0; j < m; j++) { int x = posF[ev->F[i]], y = posL[ev->L[j]]; if (x < 0 || y < 0) { okm = 0; break; } map[1 + i * m + j] = 1 + x * mp + y; }
+        if (!okm) continue;
+        Z0 = malloc(sizeof(double) * N2 * N2);
+        for (int x = 0; x < N2; x++) { const double *src = ps->Z + (long)map[x] * Np; double *dst = Z0 + (long)x * N2; for (int y = 0; y < N2; y++) dst[y] = src[map[y]]; }
+        if (opt_dnn_fold && extra == 1) {   /* the fixed variable r = (a, b) equals y_0 in the child: fold its row into the border (Brixius) */
+            int r = 1 + posF[fa] * mp + posL[fl]; const double *zr = ps->Z + (long)r * Np;
+            for (int x = 1; x < N2; x++) { Z0[x] += zr[map[x]]; Z0[(long)x * N2] += zr[map[x]]; }
+            Z0[0] += 2 * ps->Z[r] + zr[r];
         }
+        o.Z0 = Z0; __atomic_fetch_add(&g_dnn_warm, 1, __ATOMIC_RELAXED); if (d < depth - 1) __atomic_fetch_add(&g_dnn_warm_anc, 1, __ATOMIC_RELAXED);
     }
     dnnslot_t *ms = &tl_dz[depth];
-    int keep = opt_dnn_warm && depth < opt_dnn_hi;
+    int keep = opt_dnn_warm && depth < opt_dnn_hi + opt_dnn_ext;
     if (keep) { if (!ms->Z) ms->Z = malloc(sizeof(double) * (long)(N * N + 1) * (N * N + 1)); o.Zout = ms->Z; ms->ok = 0; }
     double t0 = now(); dnn_bound(&P, &o, &r); double dt = now() - t0;
     free(Z0);
@@ -2138,11 +2168,12 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     if (r.fathomed) __atomic_fetch_add(&g_dnn_fath[depth], 1, __ATOMIC_RELAXED);
     if (r.gaveup) __atomic_fetch_add(&g_dnn_gu[depth], 1, __ATOMIC_RELAXED);
     pthread_mutex_lock(&g_dnn_mtx); g_dnn_t[depth] += dt; pthread_mutex_unlock(&g_dnn_mtx);
+    tl_dnn_nf = !r.fathomed;
     return r.fathomed;
 }
 static void print_dnn(void) {
     if (opt_dnn_lo < 0) return;
-    fprintf(stderr, "dnn: %ld warm starts\n", g_dnn_warm);
+    fprintf(stderr, "dnn: %ld warm starts (%ld from an ancestor above the parent)\n", g_dnn_warm, g_dnn_warm_anc);
     if (g_dnn_refine[0]) fprintf(stderr, "dnn: %ld double-precision refinements, %ld raised the bound, %ld fathomed\n", g_dnn_refine[0], g_dnn_refine[1], g_dnn_refine[2]);
     for (int d = 0; d <= NMAX; d++) if (g_dnn_kidcut[d]) fprintf(stderr, "dnn depth %d: %ld children removed by the certificate's child bounds\n", d, g_dnn_kidcut[d]);
     for (int d = 0; d <= NMAX; d++) if (g_dnn_calls[d]) fprintf(stderr, "dnn depth %d: %ld calls, %ld fathomed, %ld given up, %.0f it/call, %.2f s/call\n", d, g_dnn_calls[d], g_dnn_fath[d], g_dnn_gu[d], (double)g_dnn_iters[d] / g_dnn_calls[d], g_dnn_t[d] / g_dnn_calls[d]);
@@ -2163,6 +2194,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
     g_nodes_all++; g_depth_all[nd->depth]++; if ((g_nodes_all & 255) == 0 || nd->depth <= opt_dnn_hi) write_progress(0);   /* DNN nodes take seconds each */
     if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { st->fathom_at_bound++; g_qpbf[nd->depth]++; return; }
     if (dnn_try(nd, &ev, ev.m, w->Ar, w->Br, w->Cr, ev.K)) { st->fathom_at_bound++; return; }
+    int dnn_nf = tl_dnn_nf;   /* for the children: was this node evaluated by the DNN and not fathomed? */
     if (opt_hybi) {   /* -hybi: inherited or cold RLT1 state; prune if its bound passes the threshold */
         int dd = nd->depth; double thr = prune_thr(g_ub), th0 = now(); g_hs_ok[dd] = 0;
         if (!g_hs[dd]) { g_hs[dd] = calloc(1, sizeof(rlt_t)); g_hs[dd]->Q = malloc(sizeof(double) * NMAX * NMAX * NMAX * NMAX); }
@@ -2221,7 +2253,7 @@ static void dfs(node_t *nd, work_t *w, stats_t *st, int who) {
         if (Sp) inherit_st(w, (const double (*)[NMAX])Sp, (const double (*)[NMAX])Tp, trp, ev.m, posF[ch[c].i], posL[ch[c].j]);
         g_chs[d0] = ch; g_nch[d0] = nch; g_cidx[d0] = c;
         g_pos[d0] = c + 1; g_npos[d0] = nch; g_nextlb[d0] = c + 1 < nch ? ch[c + 1].lb : INFINITY; g_curdepth = d0 + 1;
-        nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++;
+        nd->rc[ch[c].i] = ch[c].j; nd->cr[ch[c].j] = ch[c].i; nd->depth++; nd->dnn_ext = dnn_nf;
         dfs(nd, w, st, who);
         nd->depth--; nd->rc[ch[c].i] = -1; nd->cr[ch[c].j] = -1;
     }
@@ -2307,7 +2339,7 @@ static void estimate_top(int dives, unsigned long long seed) {
     work_t *w = calloc(1, sizeof(work_t));
     rng_t r = {seed * 2654435761ULL + 1};
     double t0 = now(); long totnodes = 0;
-    node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0;
+    node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0; root.dnn_ext = 0;
     frontier_t F = {0};
     top_enum(&root, w, &F);
     double t1 = now() - t0;
@@ -2355,7 +2387,7 @@ static void estimate(int dives, unsigned long long seed) {
     double sumN = 0, sumT = 0, sumN2 = 0; double t0 = now();
     long totnodes = 0;
     for (int d = 0; d < dives; d++) {
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         double weight = 1, estN = 0, estT = 0;
         double zroot = 0;
         for (;;) {
@@ -2500,6 +2532,7 @@ static void *worker(void *arg) {
             if ((me->st.nodes & 255) == 0 || cur.nd.depth <= opt_dnn_hi) write_progress(0);
             if (ev.m <= 1 || ev.z > prune_thr(g_ub)) { __atomic_fetch_add(&g_qpbf[cur.nd.depth], 1, __ATOMIC_RELAXED); POP_DONE(); continue; }
             if (dnn_try(&cur.nd, &ev, ev.m, me->w->Ar, me->w->Br, me->w->Cr, ev.K)) { POP_DONE(); continue; }
+            cur.nd.dnn_ext = tl_dnn_nf;   /* inherited by the children below */
             if ((opt_domlb && domlb(&cur.nd, &ev, me->w)) || (opt_domcov && domcov(&cur.nd, &ev, me->w))) { POP_DONE(); continue; }
             if (opt_fb) add_fb(&cur.nd, &ev, me->w);
             child_t ch[NMAX]; int nch = branch(&cur.nd, me->w, &ev, ch, me->id);
@@ -2649,11 +2682,23 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dnncold")) opt_dnn_warm = 0;
         else if (!strcmp(argv[a], "-dnngiveup") && a + 1 < argc) opt_dnn_giveup = atof(argv[++a]);
         else if (!strcmp(argv[a], "-dnngumin") && a + 1 < argc) opt_dnn_gumin = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-dnnext") && a + 1 < argc) opt_dnn_ext = atoi(argv[++a]);           /* DNN kept k levels below -dnn hi under a node that was not fathomed */
+        else if (!strcmp(argv[a], "-dnnguzone") && a + 1 < argc) opt_dnn_guzone = atof(argv[++a]);     /* a give-up within this relative distance of the cutoff is confirmed -dnngudelay iterations later */
+        else if (!strcmp(argv[a], "-dnngudelay") && a + 1 < argc) opt_dnn_gudelay = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-dnnbetaf") && a + 1 < argc) opt_dnn_betaf = atof(argv[++a]);       /* ADMM step beta = f * 0.1 m (1: Brixius' 0.1 m) */
         else if (!strcmp(argv[a], "-dnnfold")) opt_dnn_fold = 1;   /* warm start: fold the fixed variable's multipliers into the border (Brixius) */
         else if (!strcmp(argv[a], "-dnnlap")) opt_dnn_lap = 1;   /* inner LAPs of the certificate by reduction, exact near the cutoff (Brixius) */
         else if (!strcmp(argv[a], "-dnnrefine")) opt_dnn_refine = 1;   /* double-precision refinement of the certificate (Brixius) */
         else if (!strcmp(argv[a], "-dnngeo")) { opt_dnn_geo = 1; opt_dnn_giveup = 5; }   /* give-up rule of Brixius' code */
         else if (!strcmp(argv[a], "-dnnkid")) opt_dnn_kid = 1;   /* child bounds from the DNN certificate */
+        else if (!strcmp(argv[a], "-dnnkid2")) opt_dnn_kid = 2;
+        else if (!strcmp(argv[a], "-dnnshrink") && a + 1 < argc) opt_dnn_shrink = atoi(argv[++a]);   /* subspace shrunk after each Rayleigh-Ritz step (margin k) */
+        else if (!strcmp(argv[a], "-dnnqr1")) opt_dnn_qr1 = 1;                                        /* one Cholesky-QR per subspace step */
+        else if (!strcmp(argv[a], "-dnnpad") && a + 1 < argc) opt_dnn_pad = atoi(argv[++a]);         /* subspace padding above the negative count */
+        else if (!strcmp(argv[a], "-dnnacc") && a + 1 < argc) { opt_dnn_acc = 1; opt_dnn_acceta = atof(argv[++a]); }   /* fast ADMM, restart factor eta (1.02) */
+        else if (!strcmp(argv[a], "-dnnaccdecay") && a + 1 < argc) opt_dnn_accdecay = atof(argv[++a]);   /* momentum cap decay at each certificate drop (0.5) */
+        else if (!strcmp(argv[a], "-dnnnocert")) opt_dnn_acccert = -1;                                  /* no restart on certificate drops */
+        else if (!strcmp(argv[a], "-dnnroot") && a + 1 < argc) opt_dnn_root = atoi(argv[++a]);      /* DNN at the root (k iterations, no give-up) as warm start of the first DNN depth */
         else if (!strcmp(argv[a], "-dnnsub") && a + 1 < argc) opt_dnn_sub = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
@@ -2724,6 +2769,7 @@ int main(int argc, char **argv) {
     }
     g_ub = INFINITY; report_solution(p, hv, -1);
     if (!isnan(ub0) && ub0 < g_ub) g_ub = ub0;     /* external bound (e.g. known optimum + 1) */
+    if (opt_dnn_root > 0 && opt_dnn_lo >= 0) dnn_root_call();
     if (!strcmp(mode, "tabu")) { printf("{\"tabu\":%.0f,\"t\":%.2f}\n", hv, t_heur); return 0; }
     if (getenv("GLBMIX")) {   /* experiment: bound lambda * QPB(A, B, C0 + (1 - lambda)/lambda L), L the Gilmore-Lawler linear minorant */
         double lam = atof(getenv("GLBMIX"));
@@ -2742,7 +2788,7 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "rltbb")) {   /* experiment: B&B on the inherited RLT1 dual state */
         opt_rhalf = getenv("HALF") ? atoi(getenv("HALF")) : 1;
         if (getenv("PASS")) opt_rbb_pass = atoi(getenv("PASS")); if (getenv("SGIT")) opt_sg = atoi(getenv("SGIT")); if (getenv("THETA")) opt_sgth = atof(getenv("THETA")); if (getenv("EPS")) opt_rbb_eps = atof(getenv("EPS"));
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         work_t *w = calloc(1, sizeof(work_t)); eval_t ev; double save = g_ub; g_ub = INFINITY;
         eval_node(&nd, w, &ev, opt_nfw, opt_nfw, 0); g_ub = save;
         static rlt_t rr; rlt_init(&rr, ev.m, w->Ar, w->Br, w->Cr, ev.K);
@@ -2753,7 +2799,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(mode, "rlt1")) {   /* RLT1 dual ascent at one node (FIX="i:j ..."), ITERS passes */
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;
             while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
         int IT = getenv("ITERS") ? atoi(getenv("ITERS")) : 20; opt_rhalf = getenv("HALF") ? atoi(getenv("HALF")) : 0;
@@ -2808,7 +2854,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(mode, "dbound")) {   /* QPB + D at one node (FIX="i:j ..."): sup over (s, t, D) by Polyak supergradient, exact convexity repair */
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;
             while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
         double thr = getenv("THR") ? atof(getenv("THR")) : g_ub; int OUT = getenv("OUT") ? atoi(getenv("OUT")) : 40, INN = getenv("INN") ? atoi(getenv("INN")) : 30;
@@ -2888,7 +2934,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (!strcmp(mode, "root")) {
-        work_t *w = calloc(1, sizeof(work_t)); node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        work_t *w = calloc(1, sizeof(work_t)); node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         if (getenv("FIX")) { const char *q = getenv("FIX"); int i, j, k;   /* FIX="i:j i:j ...": evaluate that node */
             while (sscanf(q, "%d:%d%n", &i, &j, &k) == 2) { nd.rc[i] = j; nd.cr[j] = i; nd.depth++; q += k; } }
         eval_t ev; double t = now();
@@ -2899,7 +2945,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(mode, "frontier")) {   /* exact QPB subtree size below each surviving node at depth -top L */
         work_t *w = calloc(1, sizeof(work_t));
-        node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0;
+        node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0; root.dnn_ext = 0;
         frontier_t F = {0}; top_enum(&root, w, &F);
         printf("# top %d: %.0f nodes above, %d frontier nodes, ub %.0f\n", opt_top, F.cnt, F.n, (double)g_ub);
         for (int f = 0; f < F.n; f++) {
@@ -2913,7 +2959,7 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(mode, "oracle")) {   /* branching oracle: at sampled frontier nodes (depth -top L), the exact subtree size under each branching line */
         work_t *w = calloc(1, sizeof(work_t)), *w2 = calloc(1, sizeof(work_t));
-        node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0;
+        node_t root; for (int i = 0; i < N; i++) root.rc[i] = root.cr[i] = -1, root.fb[i] = 0; root.depth = 0; root.dnn_ext = 0;
         frontier_t F = {0}; top_enum(&root, w, &F);
         int step = getenv("STEP") ? atoi(getenv("STEP")) : 1, off = getenv("OFF") ? atoi(getenv("OFF")) : 0;
         printf("# top %d: %d frontier nodes, ub %.0f, every %d-th from %d\n", opt_top, F.n, (double)g_ub, step, off);
@@ -2959,7 +3005,7 @@ int main(int argc, char **argv) {
     stats_t tot = {0}; long lap_tot = 0, fw_tot = 0;
     if (!strcmp(mode, "solve")) {
         work_t *w = calloc(1, sizeof(work_t));
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         g_ckpt_last = now(); g_base = nd; g_base_depth = 0;
         if (opt_resume) {
             read_resume(opt_resume);
@@ -2971,7 +3017,7 @@ int main(int argc, char **argv) {
         if (opt_ckpt) { FILE *f = fopen(opt_ckpt, "w"); if (f) { fprintf(f, "nugckpt 1 n %d ub %.0f nodes %ld elapsed %.1f\n", N, (double)g_ub, g_nodes_before + (long)g_nodes_all, g_elapsed_before + now() - g_t0); fclose(f); } }
         lap_tot = w->nlap; fw_tot = w->nfw;
     } else if (!strcmp(mode, "par")) {
-        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0;
+        node_t nd; for (int i = 0; i < N; i++) nd.rc[i] = nd.cr[i] = -1, nd.fb[i] = 0; nd.depth = 0; nd.dnn_ext = 0;
         if (opt_resume) { read_resume(opt_resume); for (int r = 0; r < g_rn; r++) pool_push(&g_rlist[r], -INFINITY); }
         else pool_push(&nd, -INFINITY);
         pthread_t th[64]; static wk_t wk[64]; g_wk = wk; g_ckpt_last = now();
