@@ -348,6 +348,7 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
         int full = !o->sub || it == 1 || sub_p == 0 || (it - 1) % o->sub == 0 || sub_redo;
         if (o->single || !full) for (long t = 0; t < KK; t++) w->Wf[t] = (float)w->W[t];
         if (full) {
+            g_dnn_prof[6] += 1;
             if (o->single) {
                 ssyevd_("V", "L", &K, w->Wf, &K, w->evalf, w->workf, &w->lworkf, w->iwork, &w->liwork, &info);
                 for (int k = 0; k < K; k++) w->eval[k] = w->evalf[k];

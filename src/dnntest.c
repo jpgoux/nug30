@@ -25,6 +25,21 @@ static double brute(int m, const double *A, const double *B, const double *C) {
     return best;
 }
 
+
+/* reduced problem of a node: fixings loc[k] (or -1), free facilities I and locations J in increasing order */
+static int build_node(int n, const double *A, const double *B, const int *loc, double **pa, double **pb, double **pc, double *ps, int *I, int *J) {
+    int used[64] = {0}, m = 0, mj = 0;
+    for (int k = 0; k < n; k++) if (loc[k] >= 0) used[loc[k]] = 1;
+    for (int i = 0; i < n; i++) if (loc[i] < 0) I[m++] = i;
+    for (int j = 0; j < n; j++) if (!used[j]) J[mj++] = j;
+    double *a = malloc(sizeof(double) * m * m), *b = malloc(sizeof(double) * m * m), *c = calloc(m * m, sizeof(double)), s0 = 0;
+    for (int x = 0; x < m; x++) for (int y = 0; y < m; y++) { a[x * m + y] = A[I[x] * n + I[y]]; b[x * m + y] = B[J[x] * n + J[y]]; }
+    for (int x = 0; x < m; x++) for (int y = 0; y < m; y++) for (int k = 0; k < n; k++) if (loc[k] >= 0)
+        c[x * m + y] += A[I[x] * n + k] * B[J[y] * n + loc[k]] + A[k * n + I[x]] * B[loc[k] * n + J[y]];
+    for (int k = 0; k < n; k++) if (loc[k] >= 0) for (int l = 0; l < n; l++) if (loc[l] >= 0) s0 += A[k * n + l] * B[loc[k] * n + loc[l]];
+    *pa = a; *pb = b; *pc = c; *ps = s0; return m;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 5 && !strcmp(argv[1], "rand")) {
         int m = atoi(argv[2]), cnt = atoi(argv[3]); srand(atoi(argv[4]));
@@ -49,6 +64,34 @@ int main(int argc, char **argv) {
         printf("rand m=%d: %d instances, %d violations, mean relative gap %.4f\n", m, cnt, bad, gsum / cnt);
         return bad != 0;
     }
+    if (argc >= 6 && !strcmp(argv[1], "kid")) {   /* dnntest kid file.dat parent_fixings i:j cutoff: parent (gu 300, cap 4000), then the child cold, warm, warm folded */
+        FILE *f = fopen(argv[2], "r"); int n; if (!f || fscanf(f, "%d", &n) != 1) return 1;
+        double *A = malloc(sizeof(double) * n * n), *B = malloc(sizeof(double) * n * n);
+        for (int i = 0; i < n * n; i++) if (fscanf(f, "%lf", &A[i]) != 1) return 1;
+        for (int i = 0; i < n * n; i++) if (fscanf(f, "%lf", &B[i]) != 1) return 1;
+        fclose(f);
+        int loc[64]; for (int i = 0; i < n; i++) loc[i] = -1;
+        for (char *p = argv[3]; *p; ) { int i, j, k; if (sscanf(p, "%d:%d%n", &i, &j, &k) != 2) break; loc[i] = j; p += k; if (*p == ',') p++; }
+        int ci, cj; sscanf(argv[4], "%d:%d", &ci, &cj); double cut = atof(argv[5]);
+        int I[64], J[64]; double *a, *b, *c, s0; int m = build_node(n, A, B, loc, &a, &b, &c, &s0, I, J);
+        int N = m * m + 1; double *Zp = malloc(sizeof(double) * N * N);
+        dnn_prob_t P = {m, a, b, c, s0}; dnn_opt_t o = {0}; o.cutoff = cut; o.maxit = 4000; o.single = 1; o.sub = 20; o.geo = 1; o.giveup = 5; o.giveup_min = 300; o.lap_auto = 1; o.Zout = Zp;
+        dnn_res_t r; double t = now(); dnn_bound(&P, &o, &r);
+        printf("parent %s m=%d: bound %.4f fathomed %d gaveup %d iters %d %.2f s\n", argv[3], m, r.bound, r.fathomed, r.gaveup, r.iters, now() - t);
+        int pa = -1, pb = -1; for (int x = 0; x < m; x++) { if (I[x] == ci) pa = x; if (J[x] == cj) pb = x; }
+        loc[ci] = cj; int I2[64], J2[64]; double *a2, *b2, *c2, s2; int m2 = build_node(n, A, B, loc, &a2, &b2, &c2, &s2, I2, J2);
+        int N2 = m2 * m2 + 1, map[DNN_MMAX * DNN_MMAX + 1], q = 1; map[0] = 0;
+        for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) if (i != pa && j != pb) map[q++] = 1 + i * m + j;
+        double *Z0 = malloc(sizeof(double) * N2 * N2);
+        for (int mode = 0; mode < 3; mode++) {
+            for (int x = 0; x < N2; x++) for (int y = 0; y < N2; y++) Z0[(long)x * N2 + y] = Zp[(long)map[x] * N + map[y]];
+            if (mode == 2) { int rr = 1 + pa * m + pb; for (int x = 1; x < N2; x++) { Z0[x] += Zp[(long)rr * N + map[x]]; Z0[(long)x * N2] += Zp[(long)rr * N + map[x]]; } Z0[0] += 2 * Zp[rr] + Zp[(long)rr * N + rr]; }
+            dnn_prob_t P2 = {m2, a2, b2, c2, s2}; dnn_opt_t o2 = o; o2.Zout = NULL; o2.Z0 = mode ? Z0 : NULL;
+            t = now(); dnn_bound(&P2, &o2, &r);
+            printf("child %s %s m=%d: bound %.4f fathomed %d gaveup %d iters %d %.2f s\n", argv[4], mode == 0 ? "cold" : mode == 1 ? "warm" : "warm-fold", m2, r.bound, r.fathomed, r.gaveup, r.iters, now() - t);
+        }
+        return 0;
+    }
     if (argc >= 5 && !strcmp(argv[1], "node")) {
         FILE *f = fopen(argv[2], "r"); int n; if (!f || fscanf(f, "%d", &n) != 1) return 1;
         double *A = malloc(sizeof(double) * n * n), *B = malloc(sizeof(double) * n * n);
@@ -71,7 +114,7 @@ int main(int argc, char **argv) {
         if (argc > 7 && atoi(argv[7])) { o.geo = 1; o.giveup = 5; o.giveup_min = 300; }
         o.refine = argc > 8 ? atoi(argv[8]) : 0; o.lap_auto = argc > 9 ? atoi(argv[9]) : 0; o.verbose = getenv("DNN_V") != NULL;
         dnn_res_t r; double t = now(); dnn_bound(&P, &o, &r);
-        extern double g_dnn_prof[8]; fprintf(stderr, "prof: face_in %.2f eig %.2f negpart %.2f face_out %.2f cert %.2f YZ %.2f s\n", g_dnn_prof[0], g_dnn_prof[1], g_dnn_prof[2], g_dnn_prof[3], g_dnn_prof[4], g_dnn_prof[5]);
+        extern double g_dnn_prof[8]; fprintf(stderr, "prof: face_in %.2f eig %.2f negpart %.2f face_out %.2f cert %.2f YZ %.2f s, %.0f full eigendecompositions\n", g_dnn_prof[0], g_dnn_prof[1], g_dnn_prof[2], g_dnn_prof[3], g_dnn_prof[4], g_dnn_prof[5], g_dnn_prof[6]);
         printf("node %s m=%d: bound %.4f cutoff %.1f fathomed %d gaveup %d iters %d %.2f s (%.1f ms/it) refinements %ld/%ld/%ld\n", argv[3], m, r.bound, o.cutoff, r.fathomed, r.gaveup, r.iters, now() - t, 1000 * (now() - t) / (r.iters > 0 ? r.iters : 1), g_dnn_refine[0], g_dnn_refine[1], g_dnn_refine[2]);
         return 0;
     }
