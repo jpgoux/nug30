@@ -8,6 +8,8 @@ typedef struct {
     int sub;              /* > 0: subspace iteration on the negative eigenspace, full eigendecomposition every sub iterations */
     double giveup;        /* > 0: give up when best + giveup * (gain of the last 50 iterations) < cutoff */
     int giveup_min;       /* give-up allowed from this iteration on (0: 100) */
+    double gu_zone;       /* > 0: a give-up within this relative distance of the cutoff must be confirmed gu_delay iterations later */
+    int gu_delay;         /* iterations before the confirmation (0: 100) */
     int geo;
     int refine;
     int lap_auto;         /* 1: inner LAPs of the certificate by reduction bounds, exact only near the cutoff */           /* 1: when the semidefinite penalty costs the fathom, project Z' in double and certify again */              /* 1: geometric-tail give-up of Brixius (giveup = 5 there) instead of the linear one */
