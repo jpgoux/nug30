@@ -706,3 +706,20 @@ En relisant `dive_from` et `top_enum` : les nœuds de l'estimateur partaient d'u
 **Mesure directe de `-inh` sur des sous-arbres réels (lancée à 19 h 33 UTC).** Mode `frontier` : les sous-arbres des nœuds de profondeur 3, dans l'ordre de l'énumération, résolus en entier par le code de recherche, témoin et `-inh 1` en parallèle pendant 45 minutes ; comparaison sur les sous-arbres communs.
 
 **Mesure directe, premier essai (20 h 20 UTC).** En 45 minutes, aucun des deux calculs n'a fini le premier sous-arbre de profondeur 3 (le plus prometteur, donc le plus gros, vient en premier). Relancé pour 3 heures, même protocole.
+
+## 31 octobre 2026, 0 h 56 UTC : nug30 prouvé avec la borne DNN
+
+Binaire b88 (commit 9c0c59a), mode `par`, 4 cœurs : `-strat D -brtie -brecc 4 6 -brdyn -ub 6124 -dnn 2 7 -dnngumin 300 -dnngeo -dnnit 4000`. Une relance par point de reprise à 0 h 10.
+
+Résultat : optimum 6 124 prouvé en 5 550 nœuds, 9 311 s de mur (2 h 35), 37 268 s de CPU pour la borne DNN. Nate Brixius : 5 817 nœuds, 23 618 s, 1 h 42.
+
+| Niveau | Nœuds | Nate | Élagués par DNN | Nate | CPU DNN (s) | Nate (s) |
+|---|---|---|---|---|---|---|
+| 2 | 228 | 225 | 69 % | 73 % | 3 989 | 2 688 |
+| 3 | 1 833 | 1 608 | 95 % | 94 % | 14 115 | 9 258 |
+| 4 | 2 270 | 2 679 | 98 % | 99 % | 14 388 | 9 495 |
+| 5 | 1 092 | 976 | 99,6 % | 99 % | 4 271 | 2 608 |
+| 6 | 100 | 225 | 99 % | 98 % | 420 | 536 |
+| 7 | 24 | 96 | 100 % | 100 % | 85 | 177 |
+
+Lecture : même arbre à 5 % près ; l'écart de temps vient du coût par nœud (itération ADMM de 58 ms à m = 27 contre 43 ms). Prochaine étape : profiler l'itération et le certificat. Données : `/mnt/project-files/nug30/compute/dnn30/`.
