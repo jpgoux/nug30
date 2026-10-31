@@ -723,3 +723,26 @@ Résultat : optimum 6 124 prouvé en 5 550 nœuds, 9 311 s de mur (2 h 35), 37 2
 | 7 | 24 | 96 | 100 % | 100 % | 85 | 177 |
 
 Lecture : même arbre à 5 % près ; l'écart de temps vient du coût par nœud (itération ADMM de 58 ms à m = 27 contre 43 ms). Prochaine étape : profiler l'itération et le certificat. Données : `/mnt/project-files/nug30/compute/dnn30/`.
+
+## 31 octobre 2026, après-midi : l'itération DNN et sa convergence (× 1,5 sur nug25)
+
+Banc : nug25 avec le fichier de Nate (flux d'abord), 1 cœur, `-brtie -brdyn -ub 3744 -dnn 2 5 -dnngumin 300 -dnngeo -dnnit 4000 -dnnlap -strat D -brecc 4 6`, trois runs lancés ensemble pour une charge égale. Référence : 874 à 885 s, 739 nœuds, 731 appels DNN, 80 100 itérations, 11,0 ms par itération. Profil d'une itération à m = 22 (K = 442) : décomposition spectrale du sous-espace 57 % (filtre de Chebyshev 0,33 s, Cholesky-QR faite deux fois 0,35 s, produit W Q et H 0,20 s, valeurs propres de H 0,27 s sur 250 itérations), produits par la face 30 %, mise à jour de Y et Z et certificat 13 %. Sur nug30 (journal de la nuit) : 772 700 itérations, dont 26 % dans les 203 nœuds non élagués ; les nœuds élagués des niveaux 3 et 4 font 54 %.
+
+### D1. Sous-espace resserré et une seule Cholesky-QR (`-dnnshrink 8 -dnnqr1`, × 1,19, arbre à ±1 nœud)
+Après chaque étape de Rayleigh-Ritz, les paires de Ritz les plus hautes sont abandonnées quand le sous-espace dépasse nneg + marge de 8 vecteurs (le sous-espace moyen passe de 162 à 151 à m = 22). Une seule orthonormalisation par Cholesky-QR suffit (la seconde servait de sécurité numérique ; la borne finale est inchangée au millième). La validité ne dépend pas de la précision de la projection : le certificat est recalculé en double à partir de Z. Mesure : 744 s contre 874 s, 9,1 ms par itération, mêmes itérations sur les nœuds communs ; un nœud dont la borne vaut 3 742,013 pour un seuil de 3 742 n'est plus élagué (761 nœuds).
+
+### D2. ADMM à momentum avec trois garde-fous (`-dnnacc 1.02`, × 1,46 cumulé)
+Fast ADMM de Goldstein, O'Donoghue, Setzer et Baraniuk (2014) : momentum de Nesterov sur (Y, Z). Le redémarrage sur le résidu combiné (facteur 0,999 chez eux) se déclenche ici à presque chaque itération, car la projection par sous-espace rend le résidu non monotone ; on redémarre seulement quand il croît de plus de 2 % et on garde le point courant. Deuxième garde-fou : si un certificat est inférieur au meilleur, on revient au dernier itéré vrai et le plafond du momentum est divisé par deux (sans lui, le certificat oscille près du seuil et la règle d'abandon géométrique abandonne des nœuds que l'ADMM pur élague : 3 élagages perdus sur nug25). Troisième : si la règle d'abandon se déclenche à moins de 0,1 % du seuil, on repasse en ADMM pur avec un historique neuf. Mesure (lot 2, avec D1) : 600 s contre 885 s ; itérations des nœuds élagués communs 63 560 → 50 560 (−20 %), des nœuds non élagués 15 230 → 11 480 ; un élagage perdu (3 742,006), 761 nœuds.
+
+### D3. Marge 8 et décomposition complète toutes les 40 itérations (`-dnnpad 8 -dnnsub 40`, × 1,53 cumulé)
+579 s contre 885 s, 740 nœuds (un élagage perdu à 3 742,006, un gagné à 3 740,975 → 3 742,000), 9,0 ms par itération. Échantillon nug30 (27 enfants de taille 27 du nœud 1:23 7:0, réchauffés par le père) : 276 s → 165 s (−40 %), 16 élagués dans les deux cas plus un.
+
+### Pistes fermées le même jour, avec la raison
+- Bornes des enfants tirées du certificat du père, élimination seule sans toucher au branchement (`-dnnkid2`) : 43 enfants retirés sur 739, 875 s contre 878 ; les enfants retirés sont ceux qui s'élaguaient en 10 à 30 itérations.
+- Réchauffage d'un enfant depuis le frère élagué précédent (Z permuté) au lieu du père : 2 420 itérations contre 2 430 sur 13 frères ; le point de départ ne compte que pendant une trentaine d'itérations, la traîne de l'ADMM dépend du sous-problème.
+- Certificat extrapolé Z' + a (Z' − Z'précédent) : sans projection, le terme (m + 1) λmax annule le gain ; avec projection PSD, a = 1 gagne 10 itérations pour le prix de 15.
+- LAP internes exactes au lieu des réductions dans GL2 : mêmes itérations, borne plus haute de 0,3.
+- Accélération d'Anderson (profondeur 3 à 8) : 260 itérations contre 250, itération deux fois plus chère.
+- Pas β de 0,25 à 4 fois celui de Nate, γ = 1 ou 1,3 : pire.
+- Partie négative en simple précision : le certificat devient plus cher que l'économie.
+- Coupure dure des nœuds non élagués à 300 itérations (nug30) : 110 nœuds de niveau 3 s'élaguent après 300 itérations, 20 après 1 000 ; les sous-arbres perdus coûteraient plus que les itérations économisées.

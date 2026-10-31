@@ -1216,6 +1216,7 @@ static _Atomic long g_nodes_all = 0;
 static long g_depth_all[NMAX + 1];
 /* per-depth counters for the progress file: pruned by QPB, DNN calls, pruned by DNN, DNN given up */
 static long g_qpbf[NMAX + 1], g_dnn_calls[NMAX + 1], g_dnn_fath[NMAX + 1], g_dnn_gu[NMAX + 1];
+static int opt_dnn_kid = 0;
 static __thread double tl_kid[NMAX * NMAX]; static __thread int tl_kid_m;   /* child bounds of the last DNN call of this thread (-dnnkid) */
 static long g_dnn_kidcut[NMAX + 1];   /* children removed by them and not by QPB */
 /* serial search position, for live monitoring: at depth d the search is in child
@@ -1724,9 +1725,11 @@ static void sharpen_U(work_t *w, int m) {
 static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who) {
     if (opt_sens) sharpen_U(w, ev->m);
     int m = ev->m; double z = ev->z, thr = prune_thr(g_ub);
+    int kidelim = 0;   /* -dnnkid2: the DNN child bounds only remove children of the chosen line, the choice itself is unchanged */
     if (tl_kid_m == m) {   /* -dnnkid: z + U[a][b] and the DNN child bound are both valid for child (a, b) */
-        for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double d = tl_kid[a * m + b] - z;
+        if (opt_dnn_kid == 1) for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { double d = tl_kid[a * m + b] - z;
             if (d > w->U[a][b]) { if (z + w->U[a][b] <= thr && d + z > thr) __atomic_fetch_add(&g_dnn_kidcut[nd->depth], 1, __ATOMIC_RELAXED); w->U[a][b] = d; } }
+        else kidelim = 1;
         tl_kid_m = 0;
     }
     static __thread int idxA[GMAX], idxB[GMAX];
@@ -1908,6 +1911,7 @@ static int branch(const node_t *nd, work_t *w, eval_t *ev, child_t *ch, int who)
         double lb = z + Ueff[a][b];
         if (have_pro && zpro[o] > lb) lb = zpro[o];
         if (lb > thr) continue;
+        if (kidelim && tl_kid[a * m + b] > thr) { __atomic_fetch_add(&g_dnn_kidcut[nd->depth], 1, __ATOMIC_RELAXED); continue; }
         if (domc[a][b]) { __atomic_fetch_add(&g_dom_pruned, 1, __ATOMIC_RELAXED); continue; }
         ch[nch++] = (child_t){ev->F[a], ev->L[b], lb};
     }
@@ -2083,7 +2087,8 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
-static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_kid = 0, opt_dnn_refine = 0, opt_dnn_lap = 0, opt_dnn_fold = 0;
+static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_refine = 0, opt_dnn_lap = 0, opt_dnn_fold = 0;
+static int opt_dnn_shrink = 0, opt_dnn_qr1 = 0, opt_dnn_pad = 0, opt_dnn_acc = 0, opt_dnn_acccert = 0; static double opt_dnn_acceta = 0, opt_dnn_accdecay = 0;
 static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_iters[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
@@ -2099,6 +2104,7 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
     for (int a = 0; a < m; a++) for (int b = 0; b < m; b++) { A[a * m + b] = Ar[a][b]; B[a * m + b] = Br[a][b]; C[a * m + b] = Cr[a][b]; }
     dnn_prob_t P = {m, A, B, C, K}; dnn_opt_t o = {0}; dnn_res_t r;
     o.cutoff = prune_thr(g_ub); o.maxit = opt_dnn_it; o.single = opt_dnn_single; o.sub = opt_dnn_sub; o.giveup = opt_dnn_giveup; o.giveup_min = opt_dnn_gumin; o.geo = opt_dnn_geo; o.refine = opt_dnn_refine; o.lap_auto = opt_dnn_lap;
+    o.shrink = opt_dnn_shrink; o.qr1 = opt_dnn_qr1; o.pad = opt_dnn_pad; o.acc = opt_dnn_acc; o.acc_eta = opt_dnn_acceta; o.acc_cert = opt_dnn_acccert; o.acc_decay = opt_dnn_accdecay;
     if (opt_dnn_kid) o.kid = tl_kid;
     int N2 = m * m + 1; double *Z0 = NULL;
     dnnslot_t *ps = depth > 0 ? &tl_dz[depth - 1] : NULL;
@@ -2654,6 +2660,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dnnrefine")) opt_dnn_refine = 1;   /* double-precision refinement of the certificate (Brixius) */
         else if (!strcmp(argv[a], "-dnngeo")) { opt_dnn_geo = 1; opt_dnn_giveup = 5; }   /* give-up rule of Brixius' code */
         else if (!strcmp(argv[a], "-dnnkid")) opt_dnn_kid = 1;   /* child bounds from the DNN certificate */
+        else if (!strcmp(argv[a], "-dnnkid2")) opt_dnn_kid = 2;
+        else if (!strcmp(argv[a], "-dnnshrink") && a + 1 < argc) opt_dnn_shrink = atoi(argv[++a]);   /* subspace shrunk after each Rayleigh-Ritz step (margin k) */
+        else if (!strcmp(argv[a], "-dnnqr1")) opt_dnn_qr1 = 1;                                        /* one Cholesky-QR per subspace step */
+        else if (!strcmp(argv[a], "-dnnpad") && a + 1 < argc) opt_dnn_pad = atoi(argv[++a]);         /* subspace padding above the negative count */
+        else if (!strcmp(argv[a], "-dnnacc") && a + 1 < argc) { opt_dnn_acc = 1; opt_dnn_acceta = atof(argv[++a]); }   /* fast ADMM, restart factor eta (1.02) */
+        else if (!strcmp(argv[a], "-dnnaccdecay") && a + 1 < argc) opt_dnn_accdecay = atof(argv[++a]);   /* momentum cap decay at each certificate drop (0.5) */
+        else if (!strcmp(argv[a], "-dnnnocert")) opt_dnn_acccert = -1;                                  /* no restart on certificate drops */   /* child bounds from the DNN certificate, elimination only (branching choice unchanged) */
         else if (!strcmp(argv[a], "-dnnsub") && a + 1 < argc) opt_dnn_sub = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-prof")) { g_prof = 1; g_prof_t0 = now(); g_prof_c0 = __rdtsc(); atexit(print_prof); }
         else if (!strcmp(argv[a], "-fwlog")) { g_fwlog = fopen(argv[++a], "w"); g_fwlog_k = atol(argv[++a]); }
