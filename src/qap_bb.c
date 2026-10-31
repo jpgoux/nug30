@@ -2054,7 +2054,7 @@ static void rbb_dfs(rlt_t *r, const int *F, const int *Lc, int depth) {
 
 #include "dnn.h"
 /* -dnn d1 d2: certified DNN bound (dnn.c) at depths d1..d2 on the nodes QPB does not fathom, used only to fathom */
-static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_kid = 0, opt_dnn_refine = 0, opt_dnn_lap = 0;
+static int opt_dnn_lo = -1, opt_dnn_hi = -1, opt_dnn_it = 1000, opt_dnn_single = 1; static int opt_dnn_mmin = 3, opt_dnn_sub = 20; static double opt_dnn_giveup = 10; static int opt_dnn_gumin = 100; static int opt_dnn_geo = 0, opt_dnn_kid = 0, opt_dnn_refine = 0, opt_dnn_lap = 0, opt_dnn_fold = 0;
 static pthread_mutex_t g_dnn_mtx = PTHREAD_MUTEX_INITIALIZER; static long g_dnn_iters[NMAX + 1]; static double g_dnn_t[NMAX + 1];
 /* warm start: a node whose DNN bound misses keeps its final multiplier (per thread, per depth);
  * a child of it starts from that multiplier with the new assignment's row and column removed */
@@ -2087,6 +2087,11 @@ static int dnn_try(const node_t *nd, const eval_t *ev, int m, const double Ar[NM
                 for (int i = 0; i < mp; i++) for (int j = 0; j < mp; j++) if (i != a && j != b) map[q++] = 1 + i * mp + j;
                 Z0 = malloc(sizeof(double) * N2 * N2);
                 for (int x = 0; x < N2; x++) { const double *src = ps->Z + (long)map[x] * Np; double *dst = Z0 + (long)x * N2; for (int y = 0; y < N2; y++) dst[y] = src[map[y]]; }
+                if (opt_dnn_fold) {   /* the fixed variable r = (a, b) equals y_0 in the child: fold its row into the border (Brixius) */
+                    int r = 1 + a * mp + b; const double *zr = ps->Z + (long)r * Np;
+                    for (int x = 1; x < N2; x++) { Z0[x] += zr[map[x]]; Z0[(long)x * N2] += zr[map[x]]; }
+                    Z0[0] += 2 * ps->Z[r] + zr[r];
+                }
                 o.Z0 = Z0; __atomic_fetch_add(&g_dnn_warm, 1, __ATOMIC_RELAXED);
             }
         }
@@ -2611,6 +2616,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[a], "-dnncold")) opt_dnn_warm = 0;
         else if (!strcmp(argv[a], "-dnngiveup") && a + 1 < argc) opt_dnn_giveup = atof(argv[++a]);
         else if (!strcmp(argv[a], "-dnngumin") && a + 1 < argc) opt_dnn_gumin = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-dnnfold")) opt_dnn_fold = 1;   /* warm start: fold the fixed variable's multipliers into the border (Brixius) */
         else if (!strcmp(argv[a], "-dnnlap")) opt_dnn_lap = 1;   /* inner LAPs of the certificate by reduction, exact near the cutoff (Brixius) */
         else if (!strcmp(argv[a], "-dnnrefine")) opt_dnn_refine = 1;   /* double-precision refinement of the certificate (Brixius) */
         else if (!strcmp(argv[a], "-dnngeo")) { opt_dnn_geo = 1; opt_dnn_giveup = 5; }   /* give-up rule of Brixius' code */
