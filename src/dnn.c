@@ -24,6 +24,7 @@
 #include <time.h>
 static double tnow(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + 1e-9 * t.tv_nsec; }
 double g_dnn_prof[8];
+long g_dnn_refine[3];   /* double-precision refinements: tried, improved, fathomed */
 
 void dsyevd_(const char *, const char *, const int *, double *, const int *, double *, double *, const int *, int *, const int *, int *);
 void ssyevd_(const char *, const char *, const int *, float *, const int *, float *, float *, const int *, int *, const int *, int *);
@@ -64,6 +65,8 @@ typedef struct {
     float *Vmf, *VmTf, *f1, *f2, *f3, *f4; int fl;   /* fl: face products in single precision (ADMM steps only) */
     double *VmT;             /* q x m */
     double *t1, *t2;         /* scratch, N*N each */
+    double *A1, *B1, *tmpd, *uMW, *m0W;
+    double hh[DNN_MMAX], tau;   /* the Householder vector of Vm and 2 / h'h */
     double *W, *evec, *eval, *work; int *iwork; int lwork, liwork;
     float *Wf, *evalf, *workf; int lworkf, liworkf;
 } ws_t;
@@ -78,11 +81,15 @@ static ws_t *ws_new(int m) {
     double h[DNN_MMAX], hh = 0;
     for (int i = 0; i < m; i++) h[i] = 1.0 / sqrt(m) - (i == m - 1);
     for (int i = 0; i < m; i++) hh += h[i] * h[i];
+    for (int i = 0; i < m; i++) w->hh[i] = h[i];
+    w->tau = 2 / hh;
     for (int i = 0; i < m; i++) for (int a = 0; a < q; a++) {
         double x = (i == a) - 2 * h[i] * h[a] / hh;
         w->Vm[i * q + a] = x; w->VmT[a * m + i] = x;
     }
     w->t1 = malloc(sizeof(double) * N * N); w->t2 = malloc(sizeof(double) * N * N);
+    { int m2 = m * m, q2 = q * q; w->A1 = malloc(sizeof(double) * m2 * q2); w->B1 = malloc(sizeof(double) * q2 * m2); w->tmpd = malloc(sizeof(double) * (long)m2 * m * q);
+      w->uMW = malloc(sizeof(double) * q2); w->m0W = malloc(sizeof(double) * q2); }
     w->Vmf = malloc(sizeof(float) * m * q); w->VmTf = malloc(sizeof(float) * m * q);
     for (int t = 0; t < m * q; t++) { w->Vmf[t] = (float)w->Vm[t]; w->VmTf[t] = (float)w->VmT[t]; }
     w->f1 = malloc(sizeof(float) * N * N); w->f2 = malloc(sizeof(float) * N * N); w->f3 = malloc(sizeof(float) * N * N); w->f4 = malloc(sizeof(float) * (long)N * N);
@@ -100,6 +107,7 @@ static ws_t *ws_new(int m) {
     return w;
 }
 static void ws_free(ws_t *w) {
+    free(w->A1); free(w->B1); free(w->tmpd); free(w->uMW); free(w->m0W);
     free(w->Vm); free(w->VmT); free(w->Vmf); free(w->VmTf); free(w->f1); free(w->f2); free(w->f3); free(w->f4); free(w->t1); free(w->t2); free(w->W); free(w->evec); free(w->eval);
     free(w->work); free(w->iwork); free(w->Wf); free(w->evalf); free(w->workf); free(w);
 }
@@ -122,14 +130,14 @@ static void transpose(int r, int c, const double *in, double *out) {
 }
 
 /* R = V' M V, M N x N symmetric, R K x K */
-static void face_in(ws_t *w, const double *M, double *R) {
+static void face_in_dense(ws_t *w, const double *M, double *R) {
     int m = w->m, q = w->q, N = w->N, K = w->K, m2 = m * m, q2 = q * q;
     const double s2 = sqrt(0.5), um = 1.0 / m;
     /* Mxx is M[1.., 1..]: copy to contiguous m2 x m2 */
     double *X = w->t1, *Y = w->t2;
     for (int i = 0; i < m2; i++) memcpy(X + (long)i * m2, M + (long)(i + 1) * N + 1, sizeof(double) * m2);
     /* Mxx W: rows i (m2), each row an m x m matrix -> q x q */
-    double *A1 = malloc(sizeof(double) * m2 * q2), *tmp = w->fl ? NULL : malloc(sizeof(double) * (long)m2 * m * q);
+    double *A1 = w->A1, *tmp = w->tmpd;
     if (w->fl) {
         float *Xf = w->f1, *Af = w->f2, *Tf = w->f3, *Yf = w->f4;
         for (long t = 0; t < (long)m2 * m2; t++) Xf[t] = (float)X[t];
@@ -146,7 +154,7 @@ static void face_in(ws_t *w, const double *M, double *R) {
     }
     /* u' Mxx u, u' Mxx W (= colsum of A1 / m), M0x W, M0x u */
     double uMu = 0, m0u = 0;
-    double *uMW = calloc(q2, sizeof(double)), *m0W = calloc(q2, sizeof(double));
+    double *uMW = w->uMW, *m0W = w->m0W; memset(uMW, 0, sizeof(double) * q2);
     for (int i = 0; i < m2; i++) for (int b = 0; b < q2; b++) uMW[b] += A1[(long)i * q2 + b];
     for (int b = 0; b < q2; b++) uMW[b] *= um;
     { double rs = 0; for (int i = 0; i < m2; i++) for (int j = 0; j < m2; j++) rs += M[(long)(i + 1) * N + 1 + j]; uMu = rs * um * um; }
@@ -156,16 +164,15 @@ static void face_in(ws_t *w, const double *M, double *R) {
     R[0] = 0.5 * (M[0] + 2 * m0u + uMu);
     for (int b = 0; b < q2; b++) { double x = s2 * (m0W[b] + uMW[b]); R[1 + b] = x; R[(long)(1 + b) * K] = x; }
     for (int a = 0; a < q2; a++) memcpy(R + (long)(1 + a) * K + 1, X + (long)a * q2, sizeof(double) * q2);
-    free(A1); free(tmp); free(uMW); free(m0W);
 }
 
 /* Y = V R V', R K x K symmetric, Y N x N */
-static void face_out(ws_t *w, const double *R, double *Yo) {
+static void face_out_dense(ws_t *w, const double *R, double *Yo) {
     int m = w->m, q = w->q, N = w->N, K = w->K, m2 = m * m, q2 = q * q;
     const double s2 = sqrt(0.5), um = 1.0 / m;
     double *X = w->t1, *Y = w->t2;
     for (int a = 0; a < q2; a++) memcpy(X + (long)a * q2, R + (long)(1 + a) * K + 1, sizeof(double) * q2);
-    double *B1 = w->fl ? NULL : malloc(sizeof(double) * q2 * m2), *tmp = w->fl ? NULL : malloc(sizeof(double) * (long)m2 * m * q);
+    double *B1 = w->B1, *tmp = w->tmpd;
     if (w->fl) {
         float *Xf = w->f1, *Bf = w->f2, *Tf = w->f3, *Yf = w->f4;
         for (long t = 0; t < (long)q2 * q2; t++) Xf[t] = (float)X[t];
@@ -188,12 +195,76 @@ static void face_out(ws_t *w, const double *R, double *Yo) {
         double ci = 0.5 * r00 * um * um + s2 * um * Wr0[i];
         for (int j = 0; j < m2; j++) yr[j] = xr[j] + ci + s2 * um * Wr0[j];
     }
-    free(B1); free(tmp);
+}
+
+
+/* Fast transforms (as in Brixius' dnn.C). With H = I - tau h h' the Householder matrix of ws_new
+ * (H e_{m-1} = e/sqrt m, Vm = its first m-1 columns) and D = diag(1, H kron H), T = D M D gives
+ * every entry of V'MV: the face column (a, b) is the lifted index 1 + a m + b (a, b < m-1), and the
+ * index ll = 1 + (m-1) m + (m-1) carries u = e/m, so that v0 = (e_0 + D e_ll)/sqrt 2. */
+static void hh_rows_cols(ws_t *w, double *M) {   /* M <- D M D, M N x N */
+    int m = w->m, N = w->N; const double *h = w->hh; double tau = w->tau;
+    /* column side: each row's lifted part as an m x m block X <- H X H */
+    for (int r = 0; r < N; r++) {
+        double *X = M + (long)r * N + 1, s[DNN_MMAX];
+        for (int k = 0; k < m; k++) { double *row = X + k * m, d = 0; for (int l = 0; l < m; l++) d += row[l] * h[l]; d *= tau; for (int l = 0; l < m; l++) row[l] -= d * h[l]; }
+        for (int l = 0; l < m; l++) s[l] = 0;
+        for (int k = 0; k < m; k++) { const double *row = X + k * m; for (int l = 0; l < m; l++) s[l] += h[k] * row[l]; }
+        for (int k = 0; k < m; k++) { double *row = X + k * m, f = tau * h[k]; for (int l = 0; l < m; l++) row[l] -= f * s[l]; }
+    }
+    /* row side, in column chunks: along j for fixed i, then along i for fixed j */
+    double acc[64];
+    for (int c0 = 0; c0 < N; c0 += 64) {
+        int nc = N - c0 < 64 ? N - c0 : 64;
+        for (int pass = 0; pass < 2; pass++) for (int g = 0; g < m; g++) {
+            for (int c = 0; c < nc; c++) acc[c] = 0;
+            for (int t = 0; t < m; t++) { int r = pass == 0 ? 1 + g * m + t : 1 + t * m + g; const double *row = M + (long)r * N + c0; double ht = h[t]; for (int c = 0; c < nc; c++) acc[c] += ht * row[c]; }
+            for (int t = 0; t < m; t++) { int r = pass == 0 ? 1 + g * m + t : 1 + t * m + g; double *row = M + (long)r * N + c0, f = tau * h[t]; for (int c = 0; c < nc; c++) row[c] -= f * acc[c]; }
+        }
+    }
+}
+/* R = V' M V, M N x N symmetric, R K x K */
+static void face_in(ws_t *w, const double *M, double *R) {
+    int m = w->m, q = w->q, N = w->N, K = w->K, ll = 1 + (m - 1) * m + (m - 1);
+    const double s2 = sqrt(0.5);
+    double *T = w->t1; memcpy(T, M, sizeof(double) * (long)N * N);
+    hh_rows_cols(w, T);
+    R[0] = 0.5 * (T[0] + T[ll] + T[(long)ll * N] + T[(long)ll * N + ll]);
+    for (int a = 0; a < q; a++) for (int b = 0; b < q; b++) {
+        int c = 1 + a * m + b; double x = s2 * (T[c] + T[(long)ll * N + c]); R[1 + a * q + b] = x; R[(long)(1 + a * q + b) * K] = x; }
+    for (int a = 0; a < q; a++) for (int b = 0; b < q; b++) {
+        const double *tr = T + (long)(1 + a * m + b) * N + 1; double *rr = R + (long)(1 + a * q + b) * K + 1;
+        for (int c = 0; c < q; c++) for (int d = 0; d < q; d++) rr[c * q + d] = tr[c * m + d];
+    }
+}
+/* Y = V R V', R K x K symmetric, Y N x N */
+static void face_out(ws_t *w, const double *R, double *Yo) {
+    int m = w->m, q = w->q, N = w->N, K = w->K, ll = 1 + (m - 1) * m + (m - 1);
+    const double s2 = sqrt(0.5);
+    memset(Yo, 0, sizeof(double) * (long)N * N);
+    double h0 = 0.5 * R[0];
+    Yo[0] = h0; Yo[ll] = h0; Yo[(long)ll * N] = h0; Yo[(long)ll * N + ll] = h0;
+    for (int a = 0; a < q; a++) for (int b = 0; b < q; b++) {
+        int c = 1 + a * m + b; double x = s2 * R[1 + a * q + b];
+        Yo[c] = x; Yo[(long)c * N] = x; Yo[(long)ll * N + c] = x; Yo[(long)c * N + ll] = x; }
+    for (int a = 0; a < q; a++) for (int b = 0; b < q; b++) {
+        double *yr = Yo + (long)(1 + a * m + b) * N + 1; const double *rr = R + (long)(1 + a * q + b) * K + 1;
+        for (int c = 0; c < q; c++) for (int d = 0; d < q; d++) yr[c * m + d] = rr[c * q + d];
+    }
+    hh_rows_cols(w, Yo);
 }
 
 /* ---------- certificate ---------- */
 /* two-level Gilmore-Lawler bound of min <M, y y'> over lifted permutations */
-static double gl2(int m, const double *M, double *cout) {
+/* lower bound on the LAP of an n x n block: row minima, then column minima of the remainder (a dual solution) */
+static double lap_reduce(int n, const double *c) {
+    double u[DNN_MMAX], v = 0, tot = 0;
+    for (int i = 0; i < n; i++) { double x = c[i * n]; for (int j = 1; j < n; j++) if (c[i * n + j] < x) x = c[i * n + j]; u[i] = x; tot += x; }
+    for (int j = 0; j < n; j++) { double x = c[j] - u[0]; for (int i = 1; i < n; i++) if (c[i * n + j] - u[i] < x) x = c[i * n + j] - u[i]; v += x; }
+    return tot + v;
+}
+/* exact: 1 exact inner LAPs, 0 their reduction bounds (cheaper, still a valid bound) */
+static double gl2(int m, const double *M, double *cout, int exact) {
     int N = m * m + 1;
     double c[DNN_MMAX * DNN_MMAX], blk[DNN_MMAX * DNN_MMAX];
     for (int i = 0; i < m; i++) for (int j = 0; j < m; j++) {
@@ -202,7 +273,7 @@ static double gl2(int m, const double *M, double *cout) {
             int cc = 0; const double *row = M + (long)p * N + 1 + k * m;
             for (int l = 0; l < m; l++) { if (l == j) continue; blk[r * (m - 1) + cc++] = row[l]; }
             r++; }
-        double lij = m > 1 ? lap_dense(m - 1, blk, m - 1) : 0;
+        double lij = m > 1 ? (exact ? lap_dense(m - 1, blk, m - 1) : lap_reduce(m - 1, blk)) : 0;
         c[i * m + j] = 2 * M[p] + M[(long)p * N + p] + lij;
     }
     if (cout) memcpy(cout, c, sizeof(double) * m * m);
@@ -266,7 +337,7 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
     int it, every = o->cert_every > 0 ? o->cert_every : 10, maxit = o->maxit > 0 ? o->maxit : 1000;
     double cgl[DNN_MMAX * DNN_MMAX], cbest[DNN_MMAX * DNN_MMAX], rest = 0;   /* outer LAP costs of the best certificate, and its other terms */
     double best = -INFINITY, hist[64]; for (int k = 0; k < 64; k++) hist[k] = -INFINITY;
-    int sub_p = 0, sub_redo = 0, sub_nf = getenv("DNN_NF") ? atoi(getenv("DNN_NF")) : 4; double sub_sig = 0, sub_a = 0;
+    int sub_p = 0, sub_redo = 0, sub_nf = getenv("DNN_NF") ? atoi(getenv("DNN_NF")) : 2; double sub_sig = 0, sub_a = 0;
     float *sH0 = o->sub ? malloc(sizeof(float) * KK) : NULL, *sQ = o->sub ? malloc(sizeof(float) * KK) : NULL, *sG = o->sub ? malloc(sizeof(float) * KK) : NULL, *sH = o->sub ? malloc(sizeof(float) * KK) : NULL, *sth = o->sub ? malloc(sizeof(float) * K) : NULL;
     for (it = 1; it <= maxit; it++) {
         /* W = V'(Y + Z/beta)V */
@@ -290,7 +361,7 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             while (nneg < K && w->eval[nneg] < 0) nneg++;
             for (int k = 0; k < nneg; k++) { double f = sqrt(-w->eval[k]); for (int t = 0; t < K; t++) scr[(long)k * K + t] = w->evec[(long)k * K + t] * f; }
             if (o->sub) {   /* subspace for the next iterations: the nneg + pad lowest eigenvectors */
-                sub_p = nneg + 16 + nneg / 4; if (sub_p > K) sub_p = K;
+                sub_p = nneg + (getenv("DNN_PAD") ? atoi(getenv("DNN_PAD")) : (K / 20 > 8 ? K / 20 : 8)); if (sub_p > K) sub_p = K;
                 for (int t = 0; t < K; t++) for (int k = 0; k < sub_p; k++) sQ[(long)t * sub_p + k] = (float)w->evec[(long)k * K + t];
                 sub_sig = 1.05 * fabs(w->eval[K - 1]) + 1e-3; sub_a = w->eval[sub_p - 1]; if (sub_a < 0) sub_a = 0; sub_redo = 0;
             }
@@ -339,7 +410,10 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
         double tp2 = tnow(); g_dnn_prof[1] += tp2 - tp1;
         /* R = W - negative part = W + scr' scr (any R keeps the certificate valid: S is recomputed and checked) */
         memcpy(R, w->W, sizeof(double) * KK);
-        if (nneg > 0) cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, K, K, nneg, 1.0, scr, K, scr, K, 1.0, R, K);
+        if (nneg > 0) {
+            cblas_dsyrk(CblasRowMajor, CblasLower, CblasTrans, K, nneg, 1.0, scr, K, 1.0, R, K);
+            for (int a = 0; a < K; a++) for (int b = a + 1; b < K; b++) R[(long)a * K + b] = R[(long)b * K + a];
+        }
         double tp3 = tnow(); g_dnn_prof[2] += tp3 - tp2;
         face_out(w, R, VRV);
         double tp4 = tnow(); g_dnn_prof[3] += tp4 - tp3;
@@ -361,11 +435,41 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
             double lam = rump_lmax(K, S, fmax(lmx, 1e-14 * (zf + 1)), scr);
             /* the face basis is applied in floating point: allowance 64 m u ||Z'||_F (report, 2.3 (i)) */
             lam += 64.0 * m * u * zf;
-            double gl = gl2(m, Mz, o->kid ? cgl : NULL);
-            double margin = (m + 1) * fmax(lam, 0) + 8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs;
-            double bnd = gl - (m + 1) * lam - margin + (m + 1) * fmax(lam, 0);   /* gl - (m+1) lam - rounding allowances */
-            bnd = gl - (m + 1) * lam - (8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs);
-            (void)margin;
+            /* inner LAPs by reduction bounds, exact only when the bound lands just below the cutoff (Brixius' auto mode) */
+            double gl = gl2(m, Mz, o->kid ? cgl : NULL, o->lap_auto ? 0 : 1);
+            double bnd = gl - (m + 1) * lam - (8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs);   /* gl - (m+1) lam - rounding allowances */
+            if (o->lap_auto && !(bnd > cut) && bnd > cut - 1e-3 * fmax(1.0, fabs(o->cutoff)) / sc) {
+                gl = gl2(m, Mz, o->kid ? cgl : NULL, 1);
+                bnd = gl - (m + 1) * lam - (8.0 * (m + 2) * u * m1 + (m + 2) * u * sumabs);
+            }
+            if (o->refine && isfinite(lam) && lam > 0 && !(bnd > cut) && !(best > cut) && bnd + (m + 1) * lam > cut) {
+                /* the semidefinite penalty costs the fathom (single-precision steps leave V'Z'V slightly
+                 * indefinite): project Z' in double, Z' <- Z' - V P_psd(V'Z'V) V', and certify again (Brixius) */
+                int info, np = 0;
+                memcpy(w->evec, S, sizeof(double) * KK);
+                dsyevd_("V", "L", &K, w->evec, &K, w->eval, w->work, &w->lwork, w->iwork, &w->liwork, &info);
+                if (info == 0) {
+                    for (int k = 0; k < K; k++) if (w->eval[k] > 0) { double f = sqrt(w->eval[k]); for (int t = 0; t < K; t++) scr[(long)np * K + t] = w->evec[(long)k * K + t] * f; np++; }
+                    double *Pp = malloc(sizeof(double) * KK), *VPV = malloc(sizeof(double) * NN), *M2 = malloc(sizeof(double) * NN), *Z2 = malloc(sizeof(double) * NN), *S2 = malloc(sizeof(double) * KK);
+                    memset(Pp, 0, sizeof(double) * KK);
+                    if (np > 0) cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, K, K, np, 1.0, scr, K, scr, K, 0.0, Pp, K);
+                    w->fl = 0; face_out(w, Pp, VPV);
+                    for (long t = 0; t < NN; t++) M2[t] = Mz[t] - VPV[t];
+                    for (int a = 0; a < N; a++) for (int b = a + 1; b < N; b++) { double x = 0.5 * (M2[(long)a * N + b] + M2[(long)b * N + a]); M2[(long)a * N + b] = M2[(long)b * N + a] = x; }
+                    double zf2 = 0, m12 = 0;
+                    for (long t = 0; t < NN; t++) { Z2[t] = M2[t] - L[t]; zf2 += Z2[t] * Z2[t]; m12 += fabs(M2[t]); }
+                    zf2 = sqrt(zf2);
+                    face_in(w, Z2, S2);
+                    double lm2 = 0; for (int k = 0; k < K; k++) if (S2[(long)k * K + k] > lm2) lm2 = S2[(long)k * K + k];
+                    double lam2 = rump_lmax(K, S2, fmax(lm2, 1e-14 * (zf2 + 1)), scr) + 64.0 * m * u * zf2;
+                    double cgl2[DNN_MMAX * DNN_MMAX];
+                    double gla = gl2(m, M2, o->kid ? cgl2 : NULL, 1);
+                    double b2 = gla - (m + 1) * lam2 - (8.0 * (m + 2) * u * m12 + (m + 2) * u * sumabs);
+                    __sync_fetch_and_add(&g_dnn_refine[0], 1);
+                    if (isfinite(b2) && b2 > bnd) { __sync_fetch_and_add(&g_dnn_refine[1], 1); if (b2 > cut) __sync_fetch_and_add(&g_dnn_refine[2], 1); bnd = b2; gl = gla; Mz[0] = M2[0]; if (o->kid) memcpy(cgl, cgl2, sizeof(double) * m * m); }
+                    free(Pp); free(VPV); free(M2); free(Z2); free(S2);
+                }
+            }
             if (isfinite(bnd) && bnd > best) { best = bnd; if (o->kid) { memcpy(cbest, cgl, sizeof(double) * m * m); rest = bnd - (gl - Mz[0]); } }
             if (o->verbose) fprintf(stderr, "dnn it %4d  cert %.6f (unscaled %.3f)  lam %.2e  nneg %d\n", it, bnd, P->s + bnd * sc, lam, nneg);
             if (best > cut) { it++; break; }
@@ -389,13 +493,20 @@ double dnn_bound(const dnn_prob_t *P, const dnn_opt_t *o, dnn_res_t *res) {
         }
         double tp6 = tnow(); g_dnn_prof[4] += tp6 - tp5;
         /* Y = clip(V R V' - (L + Z)/beta), Y00 = 1, gangster 0, 0 <= Y <= 1 */
-        for (int a = 0; a < N; a++) for (int b = 0; b < N; b++) {
-            long t = (long)a * N + b; double x = VRV[t] - (L[t] + Z[t]) / beta;
-            if (a == 0 && b == 0) x = 1; else if (GANG(a, b)) x = 0; else x = x < 0 ? 0 : (x > 1 ? 1 : x);
-            Y[t] = x;
+        /* Z = Z + gamma beta (Y - V R V'), fused, a row at a time; gangster entries of row 1 + i m + j:
+         * same facility i or same location j, except (ij) itself */
+        {
+            const double ib = 1.0 / beta, gb = gstep * beta;
+            for (int a = 0; a < N; a++) {
+                double *yr = Y + (long)a * N, *zr = Z + (long)a * N; const double *lr = L + (long)a * N, *vr = VRV + (long)a * N;
+                for (int b = 0; b < N; b++) { double x = vr[b] - (lr[b] + zr[b]) * ib; yr[b] = x < 0 ? 0 : (x > 1 ? 1 : x); }
+                if (a == 0) yr[0] = 1;
+                else { int i = (a - 1) / m, j = (a - 1) % m;
+                    for (int l = 0; l < m; l++) if (l != j) yr[1 + i * m + l] = 0;
+                    for (int k = 0; k < m; k++) if (k != i) yr[1 + k * m + j] = 0; }
+                for (int b = 0; b < N; b++) zr[b] += gb * (yr[b] - vr[b]);
+            }
         }
-        /* Z = Z + gamma beta (Y - V R V') */
-        for (long t = 0; t < NN; t++) Z[t] += gstep * beta * (Y[t] - VRV[t]);
         g_dnn_prof[5] += tnow() - tp6;
     }
     res->iters = it - 1;

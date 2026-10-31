@@ -1,6 +1,7 @@
 /* tests of the certified DNN bound:
  *   dnntest rand m count seed   random instances, bound against enumeration
- *   dnntest root file.dat [maxit] [single]   root bound of a QAPLIB instance */
+ *   dnntest root file.dat [maxit] [single]   root bound of a QAPLIB instance
+ *   dnntest node file.dat i:j,... cutoff [maxit] [sub] [geo] [refine]   cold bound of a node (0-based fixings), as qap_bb -dnn calls it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +48,32 @@ int main(int argc, char **argv) {
         }
         printf("rand m=%d: %d instances, %d violations, mean relative gap %.4f\n", m, cnt, bad, gsum / cnt);
         return bad != 0;
+    }
+    if (argc >= 5 && !strcmp(argv[1], "node")) {
+        FILE *f = fopen(argv[2], "r"); int n; if (!f || fscanf(f, "%d", &n) != 1) return 1;
+        double *A = malloc(sizeof(double) * n * n), *B = malloc(sizeof(double) * n * n);
+        for (int i = 0; i < n * n; i++) if (fscanf(f, "%lf", &A[i]) != 1) return 1;
+        for (int i = 0; i < n * n; i++) if (fscanf(f, "%lf", &B[i]) != 1) return 1;
+        fclose(f);
+        int loc[DNN_MMAX * 2]; for (int i = 0; i < n; i++) loc[i] = -1;
+        int usedl[DNN_MMAX * 2] = {0};
+        for (char *p = argv[3]; *p; ) { int i, j, k; if (sscanf(p, "%d:%d%n", &i, &j, &k) != 2) break; loc[i] = j; usedl[j] = 1; p += k; if (*p == ',') p++; }
+        int I[DNN_MMAX * 2], J[DNN_MMAX * 2], m = 0, mj = 0;
+        for (int i = 0; i < n; i++) if (loc[i] < 0) I[m++] = i;
+        for (int j = 0; j < n; j++) if (!usedl[j]) J[mj++] = j;
+        double *a = malloc(sizeof(double) * m * m), *b = malloc(sizeof(double) * m * m), *c = calloc(m * m, sizeof(double)), s0 = 0;
+        for (int x = 0; x < m; x++) for (int y = 0; y < m; y++) { a[x * m + y] = A[I[x] * n + I[y]]; b[x * m + y] = B[J[x] * n + J[y]]; }
+        for (int x = 0; x < m; x++) for (int y = 0; y < m; y++) for (int k = 0; k < n; k++) if (loc[k] >= 0)
+            c[x * m + y] += A[I[x] * n + k] * B[J[y] * n + loc[k]] + A[k * n + I[x]] * B[loc[k] * n + J[y]];
+        for (int k = 0; k < n; k++) if (loc[k] >= 0) for (int l = 0; l < n; l++) if (loc[l] >= 0) s0 += A[k * n + l] * B[loc[k] * n + loc[l]];
+        dnn_prob_t P = {m, a, b, c, s0};
+        dnn_opt_t o = {0}; o.cutoff = atof(argv[4]); o.maxit = argc > 5 ? atoi(argv[5]) : 4000; o.single = 1; o.sub = argc > 6 ? atoi(argv[6]) : 20;
+        if (argc > 7 && atoi(argv[7])) { o.geo = 1; o.giveup = 5; o.giveup_min = 300; }
+        o.refine = argc > 8 ? atoi(argv[8]) : 0; o.lap_auto = argc > 9 ? atoi(argv[9]) : 0; o.verbose = getenv("DNN_V") != NULL;
+        dnn_res_t r; double t = now(); dnn_bound(&P, &o, &r);
+        extern double g_dnn_prof[8]; fprintf(stderr, "prof: face_in %.2f eig %.2f negpart %.2f face_out %.2f cert %.2f YZ %.2f s\n", g_dnn_prof[0], g_dnn_prof[1], g_dnn_prof[2], g_dnn_prof[3], g_dnn_prof[4], g_dnn_prof[5]);
+        printf("node %s m=%d: bound %.4f cutoff %.1f fathomed %d gaveup %d iters %d %.2f s (%.1f ms/it) refinements %ld/%ld/%ld\n", argv[3], m, r.bound, o.cutoff, r.fathomed, r.gaveup, r.iters, now() - t, 1000 * (now() - t) / (r.iters > 0 ? r.iters : 1), g_dnn_refine[0], g_dnn_refine[1], g_dnn_refine[2]);
+        return 0;
     }
     if (argc >= 3 && !strcmp(argv[1], "root")) {
         FILE *f = fopen(argv[2], "r"); int n; if (!f || fscanf(f, "%d", &n) != 1) return 1;
