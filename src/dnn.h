@@ -12,6 +12,13 @@ typedef struct {
     int refine;
     int lap_auto;         /* 1: inner LAPs of the certificate by reduction bounds, exact only near the cutoff */           /* 1: when the semidefinite penalty costs the fathom, project Z' in double and certify again */              /* 1: geometric-tail give-up of Brixius (giveup = 5 there) instead of the linear one */
     double beta, gamma;   /* 0: defaults beta = 0.1 m, gamma = 1.618 */
+    int shrink;           /* > 0: after each Rayleigh-Ritz step, drop the highest Ritz pairs when the subspace exceeds nneg + pad by this much */
+    int qr1;              /* 1: a single Cholesky-QR per subspace step instead of two */
+    int pad;              /* > 0: padding of the subspace above the negative count (default K/20, at least 8) */
+    int acc;              /* 1: fast ADMM (Nesterov momentum on Y and Z, Goldstein et al. 2014), restart kept at the current point */
+    double acc_eta;       /* restart when the combined residual grows by more than this factor (default 1.02) */
+    int acc_cert;         /* 1: drop the momentum and return to the last true iterate when a certificate falls below the best one (default 1) */
+    double acc_decay;     /* momentum cap multiplied by this at each such drop (default 0.5) */
     const double *Z0;     /* optional warm start, N x N (unscaled units), N = m^2 + 1 */
     double *Zout;         /* optional: final multiplier, unscaled */
     double *kid;          /* optional, m x m: when not fathomed, a bound for each child i -> j (else -inf) */
